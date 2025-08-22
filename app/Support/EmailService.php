@@ -210,7 +210,7 @@ class EmailService
                 <h3 style='color: #666; margin-top: 0;'>Thông tin đơn hàng</h3>
                 <p><strong>Mã đơn hàng:</strong> {$order['invoice_number']}</p>
                 <p><strong>Ngày đặt:</strong> " . date('d/m/Y H:i', strtotime($order['created_at'])) . "</p>
-                <p><strong>Tổng thanh toán:</strong> " . number_format($order['total_amount'], 0, ',', '.') . " ₫</p>
+                <p><strong>Tổng thanh toán:</strong> " . number_format((float)$order['total_amount'], 0, ',', '.') . " ₫</p>
                 <p><strong>Trạng thái:</strong> " . ucfirst($order['status']) . "</p>
             </div>
             
@@ -295,7 +295,7 @@ class EmailService
                 <h3 style='color: #666; margin-top: 0;'>Thông tin đơn hàng</h3>
                 <p><strong>Mã đơn hàng:</strong> {$order['invoice_number']}</p>
                 <p><strong>Ngày đặt:</strong> " . date('d/m/Y H:i', strtotime($order['created_at'])) . "</p>
-                <p><strong>Tổng thanh toán:</strong> " . number_format($order['total_amount'], 0, ',', '.') . " ₫</p>
+                <p><strong>Tổng thanh toán:</strong> " . number_format((float)$order['total_amount'], 0, ',', '.') . " ₫</p>
                 <p><strong>Trạng thái:</strong> " . ucfirst($order['status']) . "</p>
             </div>
             

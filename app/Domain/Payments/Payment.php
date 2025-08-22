@@ -4,9 +4,9 @@ declare(strict_types=1);
 
 namespace App\Domain\Payments;
 
-use App\Core\Database;
+use App\Core\Model;
 
-class Payment extends Database
+class Payment extends Model
 {
     protected string $table = 'payments';
 
@@ -47,7 +47,7 @@ class Payment extends Database
         return $result ?: null;
     }
 
-    public function create(array $data): bool
+    public function create(array $data): int
     {
         $sql = "
             INSERT INTO {$this->table} (
@@ -57,7 +57,7 @@ class Payment extends Database
         ";
         
         $stmt = $this->getConnection()->prepare($sql);
-        return $stmt->execute([
+        $stmt->execute([
             $data['order_id'],
             $data['payment_method'],
             $data['amount'],
@@ -65,6 +65,7 @@ class Payment extends Database
             $data['transaction_id'] ?? null,
             $data['payment_details'] ? json_encode($data['payment_details']) : null
         ]);
+        return (int)$this->getConnection()->lastInsertId();
     }
 
     public function updateStatus(int $paymentId, string $status, ?string $transactionId = null): bool

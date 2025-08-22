@@ -25,11 +25,9 @@ class InvoiceController extends Controller
         parent::__construct($container);
         
         // Get database from container
-        $database = $container->get('database');
-        
-        $this->orderModel = new Order($database);
-        $this->orderItemModel = new OrderItem($database);
-        $this->paymentModel = new Payment($database);
+        $this->orderModel = new Order($container->get('database'));
+        $this->orderItemModel = new OrderItem($container->get('database'));
+        $this->paymentModel = new Payment($container->get('database'));
         $this->cloudinaryService = new CloudinaryService();
         $this->emailService = new EmailService();
     }
@@ -184,9 +182,9 @@ class InvoiceController extends Controller
             $pdf->Cell(15, 8, $stt, 1, 0, 'C');
             $pdf->Cell(75, 8, $item['product_name'] ?? 'N/A', 1, 0, 'L');
             $pdf->Cell(20, 8, $quantity, 1, 0, 'C');
-            $pdf->Cell(30, 8, number_format($unitPrice, 0, ',', '.') . ' ₫', 1, 0, 'R');
-            $pdf->Cell(35, 8, number_format($itemTotal, 0, ',', '.') . ' ₫', 1, 0, 'R');
-            $pdf->Cell(25, 8, number_format($vat, 0, ',', '.') . ' ₫', 1, 1, 'R');
+            $pdf->Cell(30, 8, number_format((float)$unitPrice, 0, ',', '.') . ' ₫', 1, 0, 'R');
+            $pdf->Cell(35, 8, number_format((float)$itemTotal, 0, ',', '.') . ' ₫', 1, 0, 'R');
+            $pdf->Cell(25, 8, number_format((float)$vat, 0, ',', '.') . ' ₫', 1, 1, 'R');
             $stt++;
         }
 
@@ -194,21 +192,21 @@ class InvoiceController extends Controller
         $pdf->SetFont('Arial', 'B', 10);
         $pdf->SetFillColor(240, 240, 240);
         $pdf->Cell(140, 8, 'Tổng cộng:', 1, 0, 'L', true);
-        $pdf->Cell(35, 8, number_format($subtotal, 0, ',', '.') . ' ₫', 1, 0, 'R', true);
-        $pdf->Cell(25, 8, number_format($totalVat, 0, ',', '.') . ' ₫', 1, 1, 'R', true);
+        $pdf->Cell(35, 8, number_format((float)$subtotal, 0, ',', '.') . ' ₫', 1, 0, 'R', true);
+        $pdf->Cell(25, 8, number_format((float)$totalVat, 0, ',', '.') . ' ₫', 1, 1, 'R', true);
 
         // Phí vận chuyển
         $shippingFee = (float)($order['shipping_fee'] ?? 0);
         if ($shippingFee > 0) {
             $pdf->Cell(140, 8, 'Phí vận chuyển:', 1, 0, 'L');
-            $pdf->Cell(60, 8, number_format($shippingFee, 0, ',', '.') . ' ₫', 1, 1, 'R');
+            $pdf->Cell(60, 8, number_format((float)$shippingFee, 0, ',', '.') . ' ₫', 1, 1, 'R');
         }
 
         // Giảm giá
         $discountAmount = (float)($order['discount_amount_applied'] ?? 0);
         if ($discountAmount > 0) {
             $pdf->Cell(140, 8, 'Giảm giá:', 1, 0, 'L');
-            $pdf->Cell(60, 8, '-' . number_format($discountAmount, 0, ',', '.') . ' ₫', 1, 1, 'R');
+            $pdf->Cell(60, 8, '-' . number_format((float)$discountAmount, 0, ',', '.') . ' ₫', 1, 1, 'R');
         }
 
         // Tổng thanh toán
@@ -217,7 +215,7 @@ class InvoiceController extends Controller
         $pdf->SetFillColor(52, 73, 94);
         $pdf->SetTextColor(255, 255, 255);
         $pdf->Cell(140, 12, 'TỔNG THANH TOÁN:', 1, 0, 'L', true);
-        $pdf->Cell(60, 12, number_format($totalAmount, 0, ',', '.') . ' ₫', 1, 1, 'R', true);
+        $pdf->Cell(60, 12, number_format((float)$totalAmount, 0, ',', '.') . ' ₫', 1, 1, 'R', true);
         
         // Reset màu
         $pdf->SetTextColor(0, 0, 0);
@@ -317,7 +315,7 @@ class InvoiceController extends Controller
         return "
         <h2>Cảm ơn bạn đã mua hàng tại ShopSwift!</h2>
         <p>Đơn hàng #{$order['invoice_number']} của bạn đã được xử lý thành công.</p>
-        <p>Tổng thanh toán: " . number_format($order['total_amount'], 0, ',', '.') . " ₫</p>
+        <p>Tổng thanh toán: " . number_format((float)$order['total_amount'], 0, ',', '.') . " ₫</p>
         <p>Hóa đơn được đính kèm trong email này.</p>
         <p>Trân trọng,<br>ShopSwift Team</p>
         ";

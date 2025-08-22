@@ -7,6 +7,18 @@ ini_set('display_errors', 1);
 ini_set('log_errors', 1);
 ini_set('error_log', __DIR__.'/../storage/logs/php_errors.log');
 
+// CORS Headers - Add before any output
+header('Access-Control-Allow-Origin: *');
+header('Access-Control-Allow-Headers: Authorization, Content-Type, X-Requested-With');
+header('Access-Control-Allow-Methods: GET, POST, PUT, DELETE, OPTIONS, PATCH');
+header('Access-Control-Allow-Credentials: false');
+
+// Handle preflight OPTIONS request
+if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
+    http_response_code(204);
+    exit();
+}
+
 // Debug: Log all requests
 $requestPath = parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH);
 $requestMethod = $_SERVER['REQUEST_METHOD'] ?? 'GET';
@@ -23,6 +35,9 @@ use App\Middlewares\AuthMiddleware;
 
 $container = new Container(__DIR__.'/../app/config');
 $container->bootEnv(__DIR__.'/../');
+
+// Set database instance in container
+$container->set('database', $container->database());
 
 set_exception_handler(function(Throwable $e){
     http_response_code(500);

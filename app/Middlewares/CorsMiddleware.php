@@ -32,9 +32,10 @@ class CorsMiddleware {
         
         // For development - allow all origins
         header('Access-Control-Allow-Origin: *');
-        header('Access-Control-Allow-Headers: Authorization, Content-Type, X-Requested-With');
+        header('Access-Control-Allow-Headers: Authorization, Content-Type, X-Requested-With, Accept, Origin');
         header('Access-Control-Allow-Methods: GET, POST, PUT, DELETE, OPTIONS, PATCH');
         header('Access-Control-Allow-Credentials: false'); // Set to false when using wildcard origin
+        header('Access-Control-Max-Age: 86400'); // Cache preflight for 24 hours
         
         // Handle preflight OPTIONS request
         if ($req->method() === 'OPTIONS') {

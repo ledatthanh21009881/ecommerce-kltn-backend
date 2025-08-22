@@ -32,6 +32,16 @@ $router->post('/api/v1/auth/change-password', [AuthController::class, 'changePas
 $router->get('/api/v1/orders', [OrderController::class, 'index'], [new AuthMiddleware($container)]);
 $router->get('/api/v1/orders/statistics', [OrderController::class, 'statistics'], [new AuthMiddleware($container)]);
 $router->get('/api/v1/orders/{id}', [OrderController::class, 'show'], [new AuthMiddleware($container)]);
+
+// FRONTEND COMPATIBILITY ROUTES (NO VERSION PREFIX)
+// ========================================
+$router->get('/api/orders', [OrderController::class, 'index'], [new AuthMiddleware($container)]);
+$router->get('/api/orders/statistics', [OrderController::class, 'statistics'], [new AuthMiddleware($container)]);
+$router->get('/api/orders/{id}', [OrderController::class, 'show'], [new AuthMiddleware($container)]);
+
+// TEST ROUTES (NO AUTHENTICATION REQUIRED)
+// ========================================
+$router->get('/api/test/orders/{id}', [OrderController::class, 'show']);
 $router->post('/api/v1/orders', [OrderController::class, 'store'], [new AuthMiddleware($container)]);
 $router->put('/api/v1/orders/{id}', [OrderController::class, 'update'], [new AuthMiddleware($container)]);
 $router->put('/api/v1/orders/{id}/status', [OrderController::class, 'updateStatus'], [new AuthMiddleware($container)]);
@@ -47,14 +57,15 @@ $router->get('/api/v1/orders/export', [OrderController::class, 'export'], [new A
 // ========================================
 $router->get('/api/backend/v1/orders', [OrderController::class, 'index'], [new AuthMiddleware($container)]);
 $router->get('/api/backend/v1/orders/statistics', [OrderController::class, 'statistics'], [new AuthMiddleware($container)]);
+$router->get('/api/backend/v1/orders/available-shippers', [OrderController::class, 'getAvailableShippers'], [new AuthMiddleware($container)]);
+$router->get('/api/backend/v1/orders/export', [OrderController::class, 'export'], [new AuthMiddleware($container)]);
 $router->get('/api/backend/v1/orders/{id}', [OrderController::class, 'show'], [new AuthMiddleware($container)]);
 $router->put('/api/backend/v1/orders/{id}/status', [OrderController::class, 'updateStatus'], [new AuthMiddleware($container)]);
 $router->post('/api/backend/v1/orders/{id}/status', [OrderController::class, 'updateStatus'], [new AuthMiddleware($container)]);
 $router->post('/api/backend/v1/orders/{id}/assign-shipper', [OrderController::class, 'assignShipper'], [new AuthMiddleware($container)]);
 $router->post('/api/backend/v1/orders/{id}/send-invoice', [OrderController::class, 'sendInvoice'], [new AuthMiddleware($container)]);
-$router->get('/api/backend/v1/orders/available-shippers', [OrderController::class, 'getAvailableShippers'], [new AuthMiddleware($container)]);
 $router->delete('/api/backend/v1/orders/{id}', [OrderController::class, 'destroy'], [new AuthMiddleware($container)]);
-$router->get('/api/backend/v1/orders/export', [OrderController::class, 'export'], [new AuthMiddleware($container)]);
+$router->get('/api/test/available-shippers', [OrderController::class, 'getAvailableShippers']);
 
 // ========================================
 // TEST ROUTES (NO AUTHENTICATION REQUIRED)

@@ -260,7 +260,7 @@ class InvoiceService
         $html .= '
                     <tr class="total-row">
                         <td><strong>Tổng cộng:</strong></td>
-                        <td class="text-right"><strong>' . number_format($order['total_amount'], 0, ',', '.') . ' ₫</strong></td>
+                        <td class="text-right"><strong>' . number_format((float)$order['total_amount'], 0, ',', '.') . ' ₫</strong></td>
                     </tr>
                 </table>
             </div>
