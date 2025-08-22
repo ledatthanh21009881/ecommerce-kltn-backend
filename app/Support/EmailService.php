@@ -1,0 +1,340 @@
+<?php
+declare(strict_types=1);
+
+namespace App\Support;
+
+use Exception;
+
+class EmailService
+{
+    private $smtpHost;
+    private $smtpPort;
+    private $smtpUsername;
+    private $smtpPassword;
+    private $fromEmail;
+    private $fromName;
+
+    public function __construct()
+    {
+        $this->smtpHost = $_ENV['SMTP_HOST'] ?? 'smtp.gmail.com';
+        $this->smtpPort = $_ENV['SMTP_PORT'] ?? 587;
+        $this->smtpUsername = $_ENV['SMTP_USERNAME'] ?? 'thanhle02032003@gmail.com';
+        $this->smtpPassword = $_ENV['SMTP_PASSWORD'] ?? 'jrwx henr swtq cggr';
+        $this->fromEmail = $_ENV['FROM_EMAIL'] ?? 'thanhle02032003@gmail.com';
+        $this->fromName = $_ENV['FROM_NAME'] ?? 'ShopSwift';
+    }
+
+    /**
+     * Gửi email với file đính kèm
+     */
+    public function sendWithAttachment(string $to, string $subject, string $body, string $attachmentPath, string $attachmentName): bool
+    {
+        try {
+            // Sử dụng PHP mail() function với headers
+            $headers = [
+                'MIME-Version: 1.0',
+                'Content-Type: multipart/mixed; boundary="boundary"',
+                'From: ' . $this->fromName . ' <' . $this->fromEmail . '>',
+                'Reply-To: ' . $this->fromEmail,
+                'X-Mailer: PHP/' . phpversion()
+            ];
+
+            $boundary = 'boundary';
+            
+            // Email body
+            $message = "--{$boundary}\r\n";
+            $message .= "Content-Type: text/html; charset=UTF-8\r\n";
+            $message .= "Content-Transfer-Encoding: 7bit\r\n\r\n";
+            $message .= $body . "\r\n\r\n";
+
+            // File đính kèm
+            if (file_exists($attachmentPath)) {
+                $attachment = file_get_contents($attachmentPath);
+                $attachment = base64_encode($attachment);
+                
+                $message .= "--{$boundary}\r\n";
+                $message .= "Content-Type: application/pdf; name=\"{$attachmentName}\"\r\n";
+                $message .= "Content-Disposition: attachment; filename=\"{$attachmentName}\"\r\n";
+                $message .= "Content-Transfer-Encoding: base64\r\n\r\n";
+                $message .= chunk_split($attachment) . "\r\n";
+            }
+
+            // Sử dụng PHPMailer thay vì mail()
+            $mail = new \PHPMailer\PHPMailer\PHPMailer(true);
+            
+            // Cấu hình SMTP
+            $mail->isSMTP();
+            $mail->Host = $this->smtpHost;
+            $mail->SMTPAuth = true;
+            $mail->Username = $this->smtpUsername;
+            $mail->Password = $this->smtpPassword;
+            $mail->SMTPSecure = \PHPMailer\PHPMailer\PHPMailer::ENCRYPTION_STARTTLS;
+            $mail->Port = $this->smtpPort;
+            
+            // Cấu hình charset UTF-8
+            $mail->CharSet = 'UTF-8';
+            $mail->Encoding = 'base64';
+            
+            // Cấu hình người gửi và người nhận
+            $mail->setFrom($this->fromEmail, $this->fromName);
+            $mail->addAddress($to);
+            
+            // Nội dung email
+            $mail->isHTML(true);
+            $mail->Subject = $subject;
+            $mail->Body = $body;
+            
+            // Thêm file đính kèm
+            if (file_exists($attachmentPath)) {
+                $mail->addAttachment($attachmentPath, basename($attachmentPath));
+            }
+            
+            // Gửi email
+            $result = $mail->send();
+            
+            if (!$result) {
+                error_log("Failed to send email to: {$to}");
+                return false;
+            }
+
+            return true;
+
+        } catch (Exception $e) {
+            error_log("Email sending error: " . $e->getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * Gửi email đơn giản (không có file đính kèm)
+     */
+    public function send(string $to, string $subject, string $body): bool
+    {
+        try {
+            $mail = new \PHPMailer\PHPMailer\PHPMailer(true);
+            
+            // Cấu hình SMTP
+            $mail->isSMTP();
+            $mail->Host = $this->smtpHost;
+            $mail->SMTPAuth = true;
+            $mail->Username = $this->smtpUsername;
+            $mail->Password = $this->smtpPassword;
+            $mail->SMTPSecure = \PHPMailer\PHPMailer\PHPMailer::ENCRYPTION_STARTTLS;
+            $mail->Port = $this->smtpPort;
+            
+            // Cấu hình charset UTF-8
+            $mail->CharSet = 'UTF-8';
+            $mail->Encoding = 'base64';
+            
+            // Cấu hình người gửi và người nhận
+            $mail->setFrom($this->fromEmail, $this->fromName);
+            $mail->addAddress($to);
+            
+            // Nội dung email
+            $mail->isHTML(true);
+            $mail->Subject = $subject;
+            $mail->Body = $body;
+            
+            // Gửi email
+            $result = $mail->send();
+            
+            if (!$result) {
+                error_log("Failed to send email to: {$to}");
+                return false;
+            }
+
+            return true;
+
+        } catch (Exception $e) {
+            error_log("Email sending error: " . $e->getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * Gửi email thông báo đơn hàng
+     */
+    public function sendOrderNotification(string $to, array $order): bool
+    {
+        $subject = 'Xác nhận đơn hàng #' . $order['invoice_number'];
+        $body = $this->getOrderNotificationTemplate($order);
+        
+        return $this->send($to, $subject, $body);
+    }
+
+    /**
+     * Gửi email hóa đơn với file PDF đính kèm
+     */
+    public function sendInvoiceEmail(string $to, array $order): bool
+    {
+        try {
+            // Tạo hóa đơn PDF
+            $invoiceService = new \App\Services\InvoiceService();
+            $pdfContent = $invoiceService->generateInvoicePDF($order);
+            
+            // Lưu PDF tạm thời
+            $tempDir = sys_get_temp_dir();
+            $filename = 'invoice_' . $order['invoice_number'] . '.pdf';
+            $filepath = $tempDir . '/' . $filename;
+            file_put_contents($filepath, $pdfContent);
+            
+            // Gửi email với file đính kèm
+            $subject = 'Hóa đơn đơn hàng #' . $order['invoice_number'] . ' - ShopSwift';
+            $body = $this->getInvoiceEmailTemplate($order);
+            
+            $result = $this->sendWithAttachment($to, $subject, $body, $filepath, $filename);
+            
+            // Xóa file tạm
+            if (file_exists($filepath)) {
+                unlink($filepath);
+            }
+            
+            return $result;
+            
+        } catch (Exception $e) {
+            error_log("Error sending invoice email: " . $e->getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * Template email thông báo đơn hàng
+     */
+    private function getOrderNotificationTemplate(array $order): string
+    {
+        return "
+        <div style='font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;'>
+            <h2 style='color: #333;'>Cảm ơn bạn đã đặt hàng tại ShopSwift!</h2>
+            
+            <div style='background: #f9f9f9; padding: 20px; border-radius: 5px; margin: 20px 0;'>
+                <h3 style='color: #666; margin-top: 0;'>Thông tin đơn hàng</h3>
+                <p><strong>Mã đơn hàng:</strong> {$order['invoice_number']}</p>
+                <p><strong>Ngày đặt:</strong> " . date('d/m/Y H:i', strtotime($order['created_at'])) . "</p>
+                <p><strong>Tổng thanh toán:</strong> " . number_format($order['total_amount'], 0, ',', '.') . " ₫</p>
+                <p><strong>Trạng thái:</strong> " . ucfirst($order['status']) . "</p>
+            </div>
+            
+            <p>Chúng tôi sẽ xử lý đơn hàng của bạn trong thời gian sớm nhất.</p>
+            <p>Bạn sẽ nhận được email cập nhật khi đơn hàng được xử lý.</p>
+            
+            <div style='margin-top: 30px; padding-top: 20px; border-top: 1px solid #eee;'>
+                <p style='color: #666; font-size: 14px;'>
+                    Trân trọng,<br>
+                    <strong>ShopSwift Team</strong>
+                </p>
+            </div>
+        </div>
+        ";
+    }
+
+    /**
+     * Gửi email reset password với link
+     */
+    public function sendPasswordResetLinkEmail(string $to, string $accountName, string $resetLink): bool
+    {
+        $subject = 'Reset Password - ShopSwift';
+        $body = $this->getPasswordResetLinkTemplate($accountName, $resetLink);
+        
+        return $this->send($to, $subject, $body);
+    }
+
+    /**
+     * Template email reset password với link
+     */
+    private function getPasswordResetLinkTemplate(string $accountName, string $resetLink): string
+    {
+        return "
+        <html>
+        <head>
+            <title>Reset Password</title>
+        </head>
+        <body>
+            <h2>Reset Your Password</h2>
+            <p>Hello {$accountName},</p>
+            <p>You have requested to reset your password. Click the link below to set a new password:</p>
+            <p><a href='{$resetLink}' style='background-color: #4F46E5; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; display: inline-block;'>Reset Password</a></p>
+            <p>Or copy and paste this link into your browser:</p>
+            <p>{$resetLink}</p>
+            <p>This link will expire in 1 hour.</p>
+            <p>If you didn't request this password reset, please ignore this email.</p>
+            <br>
+            <p>Best regards,<br>ShopSwift Team</p>
+        </body>
+        </html>
+        ";
+    }
+
+    /**
+     * Gửi email reset password với mật khẩu mới (legacy)
+     */
+    public function sendPasswordResetEmail(string $to, string $newPassword): bool
+    {
+        $subject = 'Mật khẩu mới - ShopSwift';
+        $body = $this->getPasswordResetTemplate($newPassword);
+        
+        return $this->send($to, $subject, $body);
+    }
+
+    /**
+     * Template email hóa đơn
+     */
+    private function getInvoiceEmailTemplate(array $order): string
+    {
+        $customer = $order['customer'] ?? [];
+        $customerName = ($customer['first_name'] ?? '') . ' ' . ($customer['last_name'] ?? '');
+        
+        return "
+        <div style='font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;'>
+            <h2 style='color: #333;'>Hóa đơn đơn hàng #{$order['invoice_number']}</h2>
+            
+            <p>Xin chào {$customerName},</p>
+            
+            <p>Cảm ơn bạn đã đặt hàng tại ShopSwift! Dưới đây là hóa đơn chi tiết cho đơn hàng của bạn.</p>
+            
+            <div style='background: #f9f9f9; padding: 20px; border-radius: 5px; margin: 20px 0;'>
+                <h3 style='color: #666; margin-top: 0;'>Thông tin đơn hàng</h3>
+                <p><strong>Mã đơn hàng:</strong> {$order['invoice_number']}</p>
+                <p><strong>Ngày đặt:</strong> " . date('d/m/Y H:i', strtotime($order['created_at'])) . "</p>
+                <p><strong>Tổng thanh toán:</strong> " . number_format($order['total_amount'], 0, ',', '.') . " ₫</p>
+                <p><strong>Trạng thái:</strong> " . ucfirst($order['status']) . "</p>
+            </div>
+            
+            <p>Hóa đơn chi tiết được đính kèm trong file PDF. Vui lòng kiểm tra file đính kèm.</p>
+            
+            <p>Nếu bạn có bất kỳ câu hỏi nào về đơn hàng, vui lòng liên hệ với chúng tôi.</p>
+            
+            <div style='margin-top: 30px; padding-top: 20px; border-top: 1px solid #eee;'>
+                <p style='color: #666; font-size: 14px;'>
+                    Trân trọng,<br>
+                    <strong>ShopSwift Team</strong>
+                </p>
+            </div>
+        </div>
+        ";
+    }
+
+    /**
+     * Template email reset password với mật khẩu mới (legacy)
+     */
+    private function getPasswordResetTemplate(string $newPassword): string
+    {
+        return "
+        <div style='font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;'>
+            <h2 style='color: #333;'>Mật khẩu mới của bạn</h2>
+            
+            <div style='background: #f9f9f9; padding: 20px; border-radius: 5px; margin: 20px 0;'>
+                <p><strong>Mật khẩu mới:</strong> {$newPassword}</p>
+            </div>
+            
+            <p>Vui lòng đăng nhập với mật khẩu mới và thay đổi mật khẩu trong phần cài đặt tài khoản.</p>
+            
+            <div style='margin-top: 30px; padding-top: 20px; border-top: 1px solid #eee;'>
+                <p style='color: #666; font-size: 14px;'>
+                    Trân trọng,<br>
+                    <strong>ShopSwift Team</strong>
+                </p>
+            </div>
+        </div>
+        ";
+    }
+}

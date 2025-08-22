@@ -1,0 +1,31 @@
+-- Script để cập nhật file SQL: Bỏ tất cả giá khỏi bảng products
+-- Chỉ giữ giá ở product_variants
+
+-- Tìm và thay thế trong file shopswift.sql:
+
+-- 1. Tìm tất cả dòng có pattern: ', 0, [số], [số], [số], [số])' 
+-- 2. Thay thế bằng: ', 0)'
+
+-- VD: 
+-- CŨ: '2025-08-14 15:21:28', 0, 750000.00, 850000.00, 350000.00, 30),
+-- MỚI: '2025-08-14 15:21:28', 0),
+
+-- Regex pattern để tìm: 
+-- ', 0, \d+\.?\d*, \d+\.?\d*, \d+\.?\d*, \d+\)'
+
+-- Thay thế bằng:
+-- ', 0)'
+
+-- Hoặc pattern chi tiết hơn:
+-- ', (0|1), [0-9]+\.00, [0-9]+\.00, [0-9]+\.00, [0-9]+\)'
+-- Thay thế: ', $1)'
+
+-- Để áp dụng:
+-- 1. Mở file shopswift.sql
+-- 2. Dùng Find & Replace (Ctrl+H) 
+-- 3. Bật Regex mode
+-- 4. Tìm: ', (0|1), \d+\.?\d*, \d+\.?\d*, \d+\.?\d*, \d+\)'
+-- 5. Thay: ', $1)'
+-- 6. Replace All
+
+-- Sau đó kiểm tra file để đảm bảo tất cả sản phẩm đều đã được cập nhật

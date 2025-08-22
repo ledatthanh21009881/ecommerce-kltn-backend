@@ -1,0 +1,23 @@
+{
+  "name": "shopswift/php-backend-plain",
+  "description": "Plain PHP backend (web + app API) with structured folders.",
+  "type": "project",
+  "require": {
+    "php": ">=8.0",
+    "ext-pdo": "*",
+    "vlucas/phpdotenv": "^5.6",
+    "phpmailer/phpmailer": "^6.10",
+    "cloudinary/cloudinary_php": "2",
+    "setasign/fpdf": "^1.8",
+    "tecnickcom/tcpdf": "^6.10",
+    "dompdf/dompdf": "^3.1"
+  },
+  "autoload": {
+    "psr-4": {
+      "App\\": "app/"
+    },
+    "files": [
+      "app/Support/helpers.php"
+    ]
+  }
+}
