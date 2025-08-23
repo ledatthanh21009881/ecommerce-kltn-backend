@@ -68,6 +68,15 @@ $router->delete('/api/backend/v1/orders/{id}', [OrderController::class, 'destroy
 $router->get('/api/test/available-shippers', [OrderController::class, 'getAvailableShippers']);
 
 // ========================================
+// BACKEND INVENTORY API ROUTES (FOR ADMIN FRONTEND)
+// ========================================
+$router->get('/api/backend/v1/inventory', [InventoryController::class, 'index'], [new AuthMiddleware($container)]);
+$router->get('/api/backend/v1/inventory/{id}', [InventoryController::class, 'show'], [new AuthMiddleware($container)]);
+$router->post('/api/backend/v1/inventory', [InventoryController::class, 'store'], [new AuthMiddleware($container)]);
+$router->put('/api/backend/v1/inventory/{id}', [InventoryController::class, 'update'], [new AuthMiddleware($container)]);
+$router->delete('/api/backend/v1/inventory/{id}', [InventoryController::class, 'destroy'], [new AuthMiddleware($container)]);
+
+// ========================================
 // TEST ROUTES (NO AUTHENTICATION REQUIRED)
 // ========================================
 $router->get('/api/v1/orders/debug', function($req, $res) use ($container) {
@@ -345,8 +354,8 @@ $router->patch('/api/v1/product-images/{id}/set-main', [ProductImageController::
 // ========================================
 // INVENTORY ROUTES
 // ========================================
-$router->get('/api/v1/inventory', [InventoryController::class, 'index']);
-$router->get('/api/v1/inventory/{id}', [InventoryController::class, 'show']);
+$router->get('/api/v1/inventory', [InventoryController::class, 'index'], [new AuthMiddleware($container)]);
+$router->get('/api/v1/inventory/{id}', [InventoryController::class, 'show'], [new AuthMiddleware($container)]);
 $router->post('/api/v1/inventory', [InventoryController::class, 'store'], [new AuthMiddleware($container)]);
 $router->put('/api/v1/inventory/{id}', [InventoryController::class, 'update'], [new AuthMiddleware($container)]);
 $router->delete('/api/v1/inventory/{id}', [InventoryController::class, 'destroy'], [new AuthMiddleware($container)]);

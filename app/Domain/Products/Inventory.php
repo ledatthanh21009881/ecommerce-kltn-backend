@@ -211,7 +211,7 @@ class Inventory
     {
         $pdo = $this->database->getConnection();
         
-        $sql = "SELECT product_id FROM products WHERE product_id = ? AND is_active = 1";
+        $sql = "SELECT product_id FROM products WHERE product_id = ? AND status = 'active'";
         $stmt = $pdo->prepare($sql);
         $stmt->execute([$productId]);
         return $stmt->fetch() !== false;
