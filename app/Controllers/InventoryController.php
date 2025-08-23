@@ -107,42 +107,50 @@ class InventoryController extends Controller
     {
         try {
             $input = $req->json();
+            
+            // Debug logging
+            error_log("Inventory store input: " . json_encode($input));
 
             // Validate input
             if (!$input['product_id'] || !$input['size_id'] || !$input['sku'] || !isset($input['stock_quantity']) || !$input['status']) {
+                error_log("Missing required fields: " . json_encode($input));
                 return $res->json(['success' => false, 'message' => 'Missing required fields', 'status_code' => 400], 400);
             }
             
             if (!is_numeric($input['product_id']) || !is_numeric($input['size_id']) || !is_numeric($input['stock_quantity'])) {
-                return ResponseHelper::error("Invalid numeric fields", 400);
+                return $res->json(['success' => false, 'message' => 'Invalid numeric fields', 'status_code' => 400], 400);
             }
             
             if ($input['stock_quantity'] < 0) {
-                return ResponseHelper::error("Stock quantity cannot be negative", 400);
+                return $res->json(['success' => false, 'message' => 'Stock quantity cannot be negative', 'status_code' => 400], 400);
             }
             
             if (!in_array($input['status'], ['in_stock', 'out_of_stock'])) {
-                return ResponseHelper::error("Invalid status", 400);
+                return $res->json(['success' => false, 'message' => 'Invalid status', 'status_code' => 400], 400);
             }
 
             // Check if product exists
             if (!$this->inventory->productExists($input['product_id'])) {
-                return ResponseHelper::error("Product not found", 400);
+                error_log("Product not found: " . $input['product_id']);
+                return $res->json(['success' => false, 'message' => 'Product not found', 'status_code' => 400], 400);
             }
 
             // Check if size exists
             if (!$this->inventory->sizeExists($input['size_id'])) {
-                return ResponseHelper::error("Size not found", 400);
+                error_log("Size not found: " . $input['size_id']);
+                return $res->json(['success' => false, 'message' => 'Size not found', 'status_code' => 400], 400);
             }
 
             // Check if SKU already exists
             if ($this->inventory->skuExists($input['sku'])) {
-                return ResponseHelper::error("SKU already exists", 400);
+                error_log("SKU already exists: " . $input['sku']);
+                return $res->json(['success' => false, 'message' => 'SKU already exists', 'status_code' => 400], 400);
             }
 
             // Check if variant already exists for this product and size
             if ($this->inventory->variantExists($input['product_id'], $input['size_id'])) {
-                return ResponseHelper::error("Variant already exists for this product and size", 400);
+                error_log("Variant already exists for product: " . $input['product_id'] . " size: " . $input['size_id']);
+                return $res->json(['success' => false, 'message' => 'Variant already exists for this product and size', 'status_code' => 400], 400);
             }
 
             // Create new variant
@@ -234,7 +242,7 @@ class InventoryController extends Controller
             // Check if variant exists
             $existingVariant = $this->inventory->getById($variantId);
             if (!$existingVariant) {
-                return ResponseHelper::error("Variant not found", 404);
+                return $res->json(['success' => false, 'message' => 'Variant not found', 'status_code' => 404], 404);
             }
 
             // Deactivate variant
@@ -243,10 +251,10 @@ class InventoryController extends Controller
             // Log activity
             $this->logActivity('product_variant', $variantId, 'delete', ['deactivated' => true]);
 
-            return ResponseHelper::success(null, "Variant deactivated successfully");
+            return $res->json(['success' => true, 'message' => 'Variant deactivated successfully', 'status_code' => 200]);
 
         } catch (\Exception $e) {
-            return ResponseHelper::error("Failed to deactivate variant: " . $e->getMessage(), 500);
+            return $res->json(['success' => false, 'message' => 'Failed to deactivate variant: ' . $e->getMessage(), 'status_code' => 500], 500);
         }
     }
 
