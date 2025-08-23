@@ -111,7 +111,7 @@ class Product extends Model
                 s.size_id
             FROM product_variants pv
             LEFT JOIN sizes s ON pv.size_id = s.size_id
-            WHERE pv.product_id = ?
+            WHERE pv.product_id = ? AND pv.is_active = 1
             ORDER BY s.size_id ASC
         ";
         

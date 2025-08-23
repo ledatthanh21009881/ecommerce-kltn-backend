@@ -190,24 +190,37 @@ class InventoryController extends Controller
             // Check if variant exists
             $existingVariant = $this->inventory->getById($variantId);
             if (!$existingVariant) {
-                return ResponseHelper::error("Variant not found", 404);
+                return $res->json(['success' => false, 'message' => 'Variant not found', 'status_code' => 404], 404);
             }
 
             // Validate input
             if (isset($input['stock_quantity'])) {
                 if (!is_numeric($input['stock_quantity']) || $input['stock_quantity'] < 0) {
-                    return ResponseHelper::error("Invalid stock quantity", 400);
+                    return $res->json(['success' => false, 'message' => 'Invalid stock quantity', 'status_code' => 400], 400);
                 }
             }
             if (isset($input['status'])) {
                 if (!in_array($input['status'], ['in_stock', 'out_of_stock'])) {
-                    return ResponseHelper::error("Invalid status", 400);
+                    return $res->json(['success' => false, 'message' => 'Invalid status', 'status_code' => 400], 400);
+                }
+            }
+            if (isset($input['size_id'])) {
+                if (!is_numeric($input['size_id'])) {
+                    return $res->json(['success' => false, 'message' => 'Invalid size ID', 'status_code' => 400], 400);
+                }
+                // Check if size exists
+                if (!$this->inventory->sizeExists($input['size_id'])) {
+                    return $res->json(['success' => false, 'message' => 'Size not found', 'status_code' => 400], 400);
+                }
+                // Check if variant already exists for this product and new size (excluding current variant)
+                if ($this->inventory->variantExists($existingVariant['product_id'], $input['size_id'], $variantId)) {
+                    return $res->json(['success' => false, 'message' => 'Variant already exists for this product and size', 'status_code' => 400], 400);
                 }
             }
             if (isset($input['sku'])) {
                 // Check if SKU already exists (excluding current variant)
                 if ($this->inventory->skuExists($input['sku'], $variantId)) {
-                    return ResponseHelper::error("SKU already exists", 400);
+                    return $res->json(['success' => false, 'message' => 'SKU already exists', 'status_code' => 400], 400);
                 }
             }
 
@@ -215,7 +228,7 @@ class InventoryController extends Controller
             $success = $this->inventory->update($variantId, $input);
             
             if (!$success) {
-                return ResponseHelper::error("No fields to update", 400);
+                return $res->json(['success' => false, 'message' => 'No fields to update', 'status_code' => 400], 400);
             }
 
             // Log activity
@@ -224,15 +237,15 @@ class InventoryController extends Controller
             // Get updated variant
             $updatedVariant = $this->inventory->getById($variantId);
 
-            return ResponseHelper::success($updatedVariant, "Variant updated successfully");
+            return $res->json(['success' => true, 'message' => 'Variant updated successfully', 'status_code' => 200, 'data' => $updatedVariant]);
 
         } catch (\Exception $e) {
-            return ResponseHelper::error("Failed to update variant: " . $e->getMessage(), 500);
+            return $res->json(['success' => false, 'message' => 'Failed to update variant: ' . $e->getMessage(), 'status_code' => 500], 500);
         }
     }
 
     /**
-     * DELETE /api/v1/inventory/{variant_id} - Vô hiệu hóa variant
+     * DELETE /api/v1/inventory/{variant_id} - Xóa variant hoàn toàn
      */
     public function destroy(Request $req, Response $res)
     {
@@ -245,16 +258,16 @@ class InventoryController extends Controller
                 return $res->json(['success' => false, 'message' => 'Variant not found', 'status_code' => 404], 404);
             }
 
-            // Deactivate variant
-            $this->inventory->deactivate($variantId);
+            // Delete variant completely
+            $this->inventory->delete($variantId);
 
             // Log activity
-            $this->logActivity('product_variant', $variantId, 'delete', ['deactivated' => true]);
+            $this->logActivity('product_variant', $variantId, 'delete', ['deleted' => true]);
 
-            return $res->json(['success' => true, 'message' => 'Variant deactivated successfully', 'status_code' => 200]);
+            return $res->json(['success' => true, 'message' => 'Variant deleted successfully', 'status_code' => 200]);
 
         } catch (\Exception $e) {
-            return $res->json(['success' => false, 'message' => 'Failed to deactivate variant: ' . $e->getMessage(), 'status_code' => 500], 500);
+            return $res->json(['success' => false, 'message' => 'Failed to delete variant: ' . $e->getMessage(), 'status_code' => 500], 500);
         }
     }
 

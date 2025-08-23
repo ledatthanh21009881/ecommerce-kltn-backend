@@ -171,6 +171,11 @@ class Inventory
             $params[] = $data['sku'];
         }
 
+        if (isset($data['size_id'])) {
+            $updateFields[] = "size_id = ?";
+            $params[] = $data['size_id'];
+        }
+
         if (isset($data['stock_quantity'])) {
             $updateFields[] = "stock_quantity = ?";
             $params[] = $data['stock_quantity'];
@@ -200,6 +205,18 @@ class Inventory
         $pdo = $this->database->getConnection();
         
         $sql = "UPDATE product_variants SET is_active = 0 WHERE variant_id = ?";
+        $stmt = $pdo->prepare($sql);
+        return $stmt->execute([$variantId]);
+    }
+
+    /**
+     * Xóa variant hoàn toàn (hard delete)
+     */
+    public function delete($variantId)
+    {
+        $pdo = $this->database->getConnection();
+        
+        $sql = "DELETE FROM product_variants WHERE variant_id = ?";
         $stmt = $pdo->prepare($sql);
         return $stmt->execute([$variantId]);
     }
