@@ -1,7 +1,7 @@
 <?php
 declare(strict_types=1);
 
-use App\Controllers\{AuthController, ProductController, ProductImageController, OrderController, AdminController, CategoryController, CustomerController, ShipperController, UserController, RoleController, InventoryController, InvoiceController, VoucherController};
+use App\Controllers\{AuthController, ProductController, ProductImageController, OrderController, AdminController, CategoryController, CustomerController, ShipperController, UserController, RoleController, InventoryController, InvoiceController, VoucherController, MessageController};
 use App\Middlewares\{AuthMiddleware, AdminMiddleware};
 
 // Debug test route
@@ -98,6 +98,15 @@ $router->delete('/api/backend/v1/vouchers/{id}', [VoucherController::class, 'des
 $router->get('/api/backend/v1/vouchers/{id}/usage-stats', [VoucherController::class, 'usageStats'], [new AuthMiddleware($container)]);
 $router->put('/api/backend/v1/vouchers/{id}/toggle-status', [VoucherController::class, 'toggleStatus'], [new AuthMiddleware($container)]);
 
+// ========================================
+// BACKEND MESSAGING API ROUTES (FOR ADMIN FRONTEND)
+// ========================================
+$router->get('/api/backend/v1/conversations', [MessageController::class, 'getConversations'], [new AuthMiddleware($container)]);
+$router->get('/api/backend/v1/conversations/{id}/messages', [MessageController::class, 'getMessages'], [new AuthMiddleware($container)]);
+$router->post('/api/backend/v1/conversations', [MessageController::class, 'createConversation'], [new AuthMiddleware($container)]);
+$router->post('/api/backend/v1/messages', [MessageController::class, 'sendMessage'], [new AuthMiddleware($container)]);
+$router->post('/api/backend/v1/messages/upload-media', [MessageController::class, 'uploadMedia'], [new AuthMiddleware($container)]);
+$router->put('/api/backend/v1/conversations/{id}/mark-read', [MessageController::class, 'markAsRead'], [new AuthMiddleware($container)]);
 // ========================================
 // TEST ROUTES (NO AUTHENTICATION REQUIRED)
 // ========================================
