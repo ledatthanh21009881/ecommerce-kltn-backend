@@ -230,4 +230,245 @@ class AdminController extends Controller
             return $res->json(ResponseHelper::serverError('Failed to get activity logs: ' . $e->getMessage()));
         }
     }
+
+    /**
+     * Get user statistics
+     */
+    public function getUserStats(Request $req, Response $res)
+    {
+        try {
+            $pdo = $this->container->database()->getConnection();
+            
+            // Get total users
+            $stmt = $pdo->query("SELECT COUNT(*) as total FROM users");
+            $totalUsers = $stmt->fetch()['total'];
+            
+            // Get active users
+            $stmt = $pdo->query("
+                SELECT COUNT(*) as active 
+                FROM users u 
+                JOIN accounts a ON u.account_id = a.account_id 
+                WHERE a.is_active = 1
+            ");
+            $activeUsers = $stmt->fetch()['active'];
+            
+            // Get users by role
+            $stmt = $pdo->query("
+                SELECT r.role_name, COUNT(*) as count
+                FROM users u
+                JOIN user_roles ur ON u.user_id = ur.user_id
+                JOIN roles r ON ur.role_id = r.role_id
+                GROUP BY r.role_name
+            ");
+            $roleStats = $stmt->fetchAll();
+            
+            $stats = [
+                'total_users' => $totalUsers,
+                'active_users' => $activeUsers,
+                'admins' => 0,
+                'managers' => 0,
+                'staff' => 0,
+                'customers' => 0
+            ];
+            
+            foreach ($roleStats as $role) {
+                $roleName = strtolower($role['role_name']);
+                if (isset($stats[$roleName])) {
+                    $stats[$roleName] = $role['count'];
+                }
+            }
+            
+            return $res->json(ResponseHelper::success($stats));
+            
+        } catch (Exception $e) {
+            return $res->json(ResponseHelper::serverError('Failed to get user stats: ' . $e->getMessage()));
+        }
+    }
+
+    /**
+     * Create new user
+     */
+    public function createUser(Request $req, Response $res)
+    {
+        try {
+            $data = $req->json();
+            
+            // Validate required fields
+            $required = ['account_name', 'password', 'first_name', 'last_name', 'email', 'role_ids'];
+            foreach ($required as $field) {
+                if (empty($data[$field])) {
+                    return $res->json(ResponseHelper::error("Field '{$field}' is required"));
+                }
+            }
+            
+            $pdo = $this->container->database()->getConnection();
+            $pdo->beginTransaction();
+            
+            try {
+                // Create account
+                $stmt = $pdo->prepare("
+                    INSERT INTO accounts (account_name, password, account_type, is_active, created_at) 
+                    VALUES (?, ?, 'local', 1, NOW())
+                ");
+                $stmt->execute([
+                    $data['account_name'],
+                    password_hash($data['password'], PASSWORD_DEFAULT)
+                ]);
+                $accountId = $pdo->lastInsertId();
+                
+                // Create user
+                $stmt = $pdo->prepare("
+                    INSERT INTO users (account_id, first_name, last_name, email, phone) 
+                    VALUES (?, ?, ?, ?, ?)
+                ");
+                $stmt->execute([
+                    $accountId,
+                    $data['first_name'],
+                    $data['last_name'],
+                    $data['email'],
+                    $data['phone'] ?? null
+                ]);
+                $userId = $pdo->lastInsertId();
+                
+                // Assign roles
+                if (is_array($data['role_ids'])) {
+                    foreach ($data['role_ids'] as $roleId) {
+                        $stmt = $pdo->prepare("INSERT INTO user_roles (user_id, role_id) VALUES (?, ?)");
+                        $stmt->execute([$userId, $roleId]);
+                    }
+                }
+                
+                $pdo->commit();
+                return $res->json(ResponseHelper::success(null, 'User created successfully'));
+                
+            } catch (Exception $e) {
+                $pdo->rollBack();
+                throw $e;
+            }
+            
+        } catch (Exception $e) {
+            return $res->json(ResponseHelper::serverError('Failed to create user: ' . $e->getMessage()));
+        }
+    }
+
+    /**
+     * Update user
+     */
+    public function updateUser(Request $req, Response $res)
+    {
+        try {
+            $userId = $req->getAttribute('id');
+            $data = $req->json();
+            
+            if (!$userId) {
+                return $res->json(ResponseHelper::error('User ID is required'));
+            }
+            
+            $pdo = $this->container->database()->getConnection();
+            
+            // Check if user exists
+            $stmt = $pdo->prepare("SELECT user_id FROM users WHERE user_id = ?");
+            $stmt->execute([$userId]);
+            if (!$stmt->fetch()) {
+                return $res->json(ResponseHelper::notFound('User not found'));
+            }
+            
+            // Update user info
+            $updateFields = [];
+            $params = [];
+            
+            if (isset($data['first_name'])) {
+                $updateFields[] = "first_name = ?";
+                $params[] = $data['first_name'];
+            }
+            if (isset($data['last_name'])) {
+                $updateFields[] = "last_name = ?";
+                $params[] = $data['last_name'];
+            }
+            if (isset($data['email'])) {
+                $updateFields[] = "email = ?";
+                $params[] = $data['email'];
+            }
+            if (isset($data['phone'])) {
+                $updateFields[] = "phone = ?";
+                $params[] = $data['phone'];
+            }
+            
+            if (!empty($updateFields)) {
+                $params[] = $userId;
+                $sql = "UPDATE users SET " . implode(', ', $updateFields) . " WHERE user_id = ?";
+                $stmt = $pdo->prepare($sql);
+                $stmt->execute($params);
+            }
+            
+            // Update roles if provided
+            if (isset($data['role_ids']) && is_array($data['role_ids'])) {
+                // Remove existing roles
+                $stmt = $pdo->prepare("DELETE FROM user_roles WHERE user_id = ?");
+                $stmt->execute([$userId]);
+                
+                // Add new roles
+                foreach ($data['role_ids'] as $roleId) {
+                    $stmt = $pdo->prepare("INSERT INTO user_roles (user_id, role_id) VALUES (?, ?)");
+                    $stmt->execute([$userId, $roleId]);
+                }
+            }
+            
+            return $res->json(ResponseHelper::success(null, 'User updated successfully'));
+            
+        } catch (Exception $e) {
+            return $res->json(ResponseHelper::serverError('Failed to update user: ' . $e->getMessage()));
+        }
+    }
+
+    /**
+     * Delete user
+     */
+    public function deleteUser(Request $req, Response $res)
+    {
+        try {
+            $userId = $req->getAttribute('id');
+            
+            if (!$userId) {
+                return $res->json(ResponseHelper::error('User ID is required'));
+            }
+            
+            $pdo = $this->container->database()->getConnection();
+            
+            // Check if user exists
+            $stmt = $pdo->prepare("SELECT account_id FROM users WHERE user_id = ?");
+            $stmt->execute([$userId]);
+            $user = $stmt->fetch();
+            
+            if (!$user) {
+                return $res->json(ResponseHelper::notFound('User not found'));
+            }
+            
+            $pdo->beginTransaction();
+            
+            try {
+                // Delete user roles
+                $stmt = $pdo->prepare("DELETE FROM user_roles WHERE user_id = ?");
+                $stmt->execute([$userId]);
+                
+                // Delete user
+                $stmt = $pdo->prepare("DELETE FROM users WHERE user_id = ?");
+                $stmt->execute([$userId]);
+                
+                // Delete account
+                $stmt = $pdo->prepare("DELETE FROM accounts WHERE account_id = ?");
+                $stmt->execute([$user['account_id']]);
+                
+                $pdo->commit();
+                return $res->json(ResponseHelper::success(null, 'User deleted successfully'));
+                
+            } catch (Exception $e) {
+                $pdo->rollBack();
+                throw $e;
+            }
+            
+        } catch (Exception $e) {
+            return $res->json(ResponseHelper::serverError('Failed to delete user: ' . $e->getMessage()));
+        }
+    }
 }

@@ -203,6 +203,14 @@ class RoleController extends Controller
     }
 
     /**
+     * Lấy tất cả roles (alias cho getAll)
+     */
+    public function getAllRoles(Request $req, Response $res)
+    {
+        return $this->getAll($req, $res);
+    }
+
+    /**
      * Lấy roles của user
      */
     public function getUserRoles(int $userId): void

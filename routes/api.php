@@ -1,7 +1,7 @@
 <?php
 declare(strict_types=1);
 
-use App\Controllers\{AuthController, ProductController, ProductImageController, OrderController, AdminController, CategoryController, CustomerController, ShipperController, UserController, RoleController, InventoryController, InvoiceController};
+use App\Controllers\{AuthController, ProductController, ProductImageController, OrderController, AdminController, CategoryController, CustomerController, ShipperController, UserController, RoleController, InventoryController, InvoiceController, VoucherController};
 use App\Middlewares\{AuthMiddleware, AdminMiddleware};
 
 // Debug test route
@@ -75,6 +75,28 @@ $router->get('/api/backend/v1/inventory/{id}', [InventoryController::class, 'sho
 $router->post('/api/backend/v1/inventory', [InventoryController::class, 'store'], [new AuthMiddleware($container)]);
 $router->put('/api/backend/v1/inventory/{id}', [InventoryController::class, 'update'], [new AuthMiddleware($container)]);
 $router->delete('/api/backend/v1/inventory/{id}', [InventoryController::class, 'destroy'], [new AuthMiddleware($container)]);
+
+// ========================================
+// BACKEND USER MANAGEMENT API ROUTES (FOR ADMIN FRONTEND)
+// ========================================
+$router->get('/api/backend/v1/users', [AdminController::class, 'getUsers'], [new AuthMiddleware($container)]);
+$router->get('/api/backend/v1/users/stats', [AdminController::class, 'getUserStats'], [new AuthMiddleware($container)]);
+$router->post('/api/backend/v1/users', [AdminController::class, 'createUser'], [new AuthMiddleware($container)]);
+$router->put('/api/backend/v1/users/{id}', [AdminController::class, 'updateUser'], [new AuthMiddleware($container)]);
+$router->delete('/api/backend/v1/users/{id}', [AdminController::class, 'deleteUser'], [new AuthMiddleware($container)]);
+$router->get('/api/backend/v1/roles/all', [RoleController::class, 'getAllRoles'], [new AuthMiddleware($container)]);
+
+// ========================================
+// BACKEND VOUCHER MANAGEMENT API ROUTES (FOR ADMIN FRONTEND)
+// ========================================
+$router->get('/api/backend/v1/vouchers', [VoucherController::class, 'index'], [new AuthMiddleware($container)]);
+$router->get('/api/backend/v1/vouchers/stats', [VoucherController::class, 'stats'], [new AuthMiddleware($container)]);
+$router->get('/api/backend/v1/vouchers/{id}', [VoucherController::class, 'show'], [new AuthMiddleware($container)]);
+$router->post('/api/backend/v1/vouchers', [VoucherController::class, 'store'], [new AuthMiddleware($container)]);
+$router->put('/api/backend/v1/vouchers/{id}', [VoucherController::class, 'update'], [new AuthMiddleware($container)]);
+$router->delete('/api/backend/v1/vouchers/{id}', [VoucherController::class, 'destroy'], [new AuthMiddleware($container)]);
+$router->get('/api/backend/v1/vouchers/{id}/usage-stats', [VoucherController::class, 'usageStats'], [new AuthMiddleware($container)]);
+$router->put('/api/backend/v1/vouchers/{id}/toggle-status', [VoucherController::class, 'toggleStatus'], [new AuthMiddleware($container)]);
 
 // ========================================
 // TEST ROUTES (NO AUTHENTICATION REQUIRED)
