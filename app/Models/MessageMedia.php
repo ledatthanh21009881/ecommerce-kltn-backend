@@ -40,4 +40,11 @@ class MessageMedia
         ]);
         return $this->db->lastInsertId();
     }
+
+    public function deleteByMessageId($messageId)
+    {
+        $sql = "DELETE FROM message_media WHERE message_id = ?";
+        $stmt = $this->db->prepare($sql);
+        return $stmt->execute([$messageId]);
+    }
 }

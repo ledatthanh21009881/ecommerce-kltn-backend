@@ -106,6 +106,7 @@ $router->get('/api/backend/v1/conversations/{id}/messages', [MessageController::
 $router->post('/api/backend/v1/conversations', [MessageController::class, 'createConversation'], [new AuthMiddleware($container)]);
 $router->post('/api/backend/v1/messages', [MessageController::class, 'sendMessage'], [new AuthMiddleware($container)]);
 $router->post('/api/backend/v1/messages/upload-media', [MessageController::class, 'uploadMedia'], [new AuthMiddleware($container)]);
+$router->delete('/api/backend/v1/messages/{id}', [MessageController::class, 'deleteMessage'], [new AuthMiddleware($container)]);
 $router->put('/api/backend/v1/conversations/{id}/mark-read', [MessageController::class, 'markAsRead'], [new AuthMiddleware($container)]);
 // ========================================
 // TEST ROUTES (NO AUTHENTICATION REQUIRED)

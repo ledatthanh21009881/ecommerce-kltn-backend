@@ -468,6 +468,90 @@ class MessageController extends BaseController
         }
     }
 
+    // Xóa tin nhắn
+    public function deleteMessage(Request $req, Response $res)
+    {
+        try {
+            $user = $this->getCurrentUser();
+            if (!$user) {
+                http_response_code(401);
+                echo json_encode([
+                    'success' => false,
+                    'message' => 'Unauthorized',
+                    'status_code' => 401
+                ]);
+                return;
+            }
+
+            $messageId = $req->getAttribute('id');
+            
+            // Lấy thông tin tin nhắn trước khi xóa
+            $message = $this->messageModel->findById($messageId);
+            if (!$message) {
+                http_response_code(404);
+                echo json_encode([
+                    'success' => false,
+                    'message' => 'Message not found',
+                    'status_code' => 404
+                ]);
+                return;
+            }
+
+            // Kiểm tra quyền xóa (chỉ người gửi mới được xóa)
+            if ($message['sender_id'] != $user['user_id']) {
+                http_response_code(403);
+                echo json_encode([
+                    'success' => false,
+                    'message' => 'You can only delete your own messages',
+                    'status_code' => 403
+                ]);
+                return;
+            }
+
+            // Lấy media của tin nhắn để xóa khỏi Cloudinary
+            $mediaFiles = $this->messageMediaModel->getByMessageId($messageId);
+            
+            // Xóa media từ Cloudinary
+            foreach ($mediaFiles as $media) {
+                if (!empty($media['public_id'])) {
+                    $this->cloudinaryService->deleteImage($media['public_id']);
+                }
+            }
+
+            // Xóa media từ database
+            $this->messageMediaModel->deleteByMessageId($messageId);
+            
+            // Xóa tin nhắn (soft delete)
+            $result = $this->messageModel->delete($messageId);
+            
+            if (!$result) {
+                http_response_code(500);
+                echo json_encode([
+                    'success' => false,
+                    'message' => 'Failed to delete message',
+                    'status_code' => 500
+                ]);
+                return;
+            }
+
+            http_response_code(200);
+            echo json_encode([
+                'success' => true,
+                'message' => 'Message deleted successfully',
+                'status_code' => 200
+            ]);
+
+        } catch (\Exception $e) {
+            error_log('Delete message error: ' . $e->getMessage());
+            http_response_code(500);
+            echo json_encode([
+                'success' => false,
+                'message' => 'Error: ' . $e->getMessage(),
+                'status_code' => 500
+            ]);
+        }
+    }
+
     private function getCurrentUser()
     {
         $headers = getallheaders();

@@ -96,4 +96,20 @@ class Message
 
         return $message;
     }
+
+    public function findById($messageId)
+    {
+        $sql = "SELECT * FROM messages WHERE message_id = ? AND deleted_at IS NULL";
+        $stmt = $this->db->prepare($sql);
+        $stmt->execute([$messageId]);
+        return $stmt->fetch(\PDO::FETCH_ASSOC);
+    }
+
+    public function delete($messageId)
+    {
+        // Soft delete - chỉ set deleted_at
+        $sql = "UPDATE messages SET deleted_at = NOW() WHERE message_id = ?";
+        $stmt = $this->db->prepare($sql);
+        return $stmt->execute([$messageId]);
+    }
 }

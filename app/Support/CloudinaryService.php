@@ -312,6 +312,68 @@ class CloudinaryService
     }
 
     /**
+     * Delete image from Cloudinary
+     */
+    public function deleteImage(string $publicId): array
+    {
+        try {
+            $timestamp = time();
+            
+            $params = [
+                'timestamp' => $timestamp,
+                'public_id' => $publicId
+            ];
+            
+            $signature = $this->generateSignature($params);
+            $params['signature'] = $signature;
+            $params['api_key'] = $this->apiKey;
+            
+            $url = "https://api.cloudinary.com/v1_1/{$this->cloudName}/image/destroy";
+            
+            $ch = curl_init();
+            curl_setopt($ch, CURLOPT_URL, $url);
+            curl_setopt($ch, CURLOPT_POST, true);
+            curl_setopt($ch, CURLOPT_POSTFIELDS, $params);
+            curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+            curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+            curl_setopt($ch, CURLOPT_TIMEOUT, 30);
+            
+            $response = curl_exec($ch);
+            $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+            $curlError = curl_error($ch);
+            curl_close($ch);
+            
+            if ($curlError) {
+                throw new \Exception("cURL error: $curlError");
+            }
+            
+            if ($httpCode !== 200) {
+                throw new \Exception("Cloudinary delete failed with HTTP code: $httpCode. Response: $response");
+            }
+            
+            $result = json_decode($response, true);
+            if (!$result) {
+                throw new \Exception("Invalid JSON response from Cloudinary: $response");
+            }
+            
+            if (isset($result['error'])) {
+                throw new \Exception("Cloudinary error: " . $result['error']['message']);
+            }
+            
+            return [
+                'success' => true,
+                'message' => 'Image deleted successfully'
+            ];
+            
+        } catch (\Exception $e) {
+            return [
+                'success' => false,
+                'error' => $e->getMessage()
+            ];
+        }
+    }
+
+    /**
      * Upload PDF file to Cloudinary
      */
     public function uploadPDF(string $filePath, ?string $folder = null): string
