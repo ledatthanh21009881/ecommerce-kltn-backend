@@ -89,7 +89,16 @@ class WebSocketService implements MessageComponentInterface
             $conn->conversations = [];
         }
         
-        $conn->conversations[] = $conversationId;
+        // Convert to array if it's not already
+        if (!is_array($conn->conversations)) {
+            $conn->conversations = [];
+        }
+        
+        // Add conversation if not already present
+        if (!in_array($conversationId, $conn->conversations)) {
+            $conn->conversations[] = $conversationId;
+        }
+        
         echo "User {$conn->userId} joined conversation {$conversationId}\n";
     }
 

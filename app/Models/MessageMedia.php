@@ -33,14 +33,10 @@ class MessageMedia
         $stmt->execute([
             $data['message_id'],
             $data['url'],
-            $data['media_public_id'],
+            $data['public_id'],
             $data['type'],
-            json_encode([
-                'file_name' => $data['file_name'] ?? null,
-                'file_size' => $data['file_size'] ?? null,
-                'mime_type' => $data['mime_type'] ?? null
-            ]),
-            date('Y-m-d H:i:s')
+            $data['metadata'],
+            $data['created_at']
         ]);
         return $this->db->lastInsertId();
     }

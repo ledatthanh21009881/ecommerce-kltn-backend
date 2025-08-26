@@ -4,7 +4,7 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "873cd65fdc6b1bcf1a9db4aff725610d",
+    "content-hash": "ed024faf1e06b79ec9af0ddbf1a5891c",
     "packages": [
         {
             "name": "cboden/ratchet",
@@ -71,34 +71,36 @@
         },
         {
             "name": "cloudinary/cloudinary_php",
-            "version": "2.0.0",
+            "version": "3.1.1",
             "source": {
                 "type": "git",
                 "url": "https://github.com/cloudinary/cloudinary_php.git",
-                "reference": "92c343a14cad59aabde1932364da08b6326fb050"
+                "reference": "5b7d5480ba91d1df19ebb0041b23d85a228845ba"
             },
             "dist": {
                 "type": "zip",
-                "url": "https://api.github.com/repos/cloudinary/cloudinary_php/zipball/92c343a14cad59aabde1932364da08b6326fb050",
-                "reference": "92c343a14cad59aabde1932364da08b6326fb050",
+                "url": "https://api.github.com/repos/cloudinary/cloudinary_php/zipball/5b7d5480ba91d1df19ebb0041b23d85a228845ba",
+                "reference": "5b7d5480ba91d1df19ebb0041b23d85a228845ba",
                 "shasum": ""
             },
             "require": {
+                "cloudinary/transformation-builder-sdk": "^2",
                 "ext-json": "*",
-                "guzzlehttp/guzzle": "^6|^7",
-                "monolog/monolog": "*",
-                "php": ">=5.6.0",
-                "shrikeh/teapot": "^1|^2"
+                "guzzlehttp/guzzle": "^7.4.5",
+                "guzzlehttp/promises": "^1.5.3|^2.0",
+                "guzzlehttp/psr7": "^2.7",
+                "monolog/monolog": "^2|^3",
+                "php": ">=8.0.0",
+                "psr/log": "^2|^3"
             },
             "require-dev": {
-                "consolidation/robo": "~1",
                 "ext-dom": "*",
                 "ext-libxml": "*",
                 "ext-zip": "*",
                 "friendsofphp/php-cs-fixer": "*",
                 "phpmd/phpmd": "*",
-                "phpunit/phpunit": "^5",
-                "squizlabs/php_codesniffer": "3.*"
+                "squizlabs/php_codesniffer": "*",
+                "symfony/phpunit-bridge": "^7.2"
             },
             "type": "library",
             "autoload": {
@@ -128,9 +130,68 @@
             "support": {
                 "email": "info@cloudinary.com",
                 "issues": "https://github.com/cloudinary/cloudinary_php/issues",
-                "source": "https://github.com/cloudinary/cloudinary_php/tree/2.0.0"
+                "source": "https://github.com/cloudinary/cloudinary_php/tree/3.1.1"
             },
-            "time": "2021-01-31T17:31:13+00:00"
+            "time": "2025-06-17T17:17:38+00:00"
+        },
+        {
+            "name": "cloudinary/transformation-builder-sdk",
+            "version": "2.1.2",
+            "source": {
+                "type": "git",
+                "url": "https://github.com/cloudinary/php-transformation-builder-sdk.git",
+                "reference": "6ff4a84f14dbc5197563db63b6abbbe77a68d7e7"
+            },
+            "dist": {
+                "type": "zip",
+                "url": "https://api.github.com/repos/cloudinary/php-transformation-builder-sdk/zipball/6ff4a84f14dbc5197563db63b6abbbe77a68d7e7",
+                "reference": "6ff4a84f14dbc5197563db63b6abbbe77a68d7e7",
+                "shasum": ""
+            },
+            "require": {
+                "ext-json": "*",
+                "php": ">=8.0.0"
+            },
+            "require-dev": {
+                "ext-dom": "*",
+                "ext-libxml": "*",
+                "ext-zip": "*",
+                "friendsofphp/php-cs-fixer": "*",
+                "phpmd/phpmd": "*",
+                "squizlabs/php_codesniffer": "*",
+                "symfony/phpunit-bridge": "^7.2"
+            },
+            "type": "library",
+            "autoload": {
+                "classmap": [
+                    "src"
+                ]
+            },
+            "notification-url": "https://packagist.org/downloads/",
+            "license": [
+                "MIT"
+            ],
+            "authors": [
+                {
+                    "name": "Cloudinary",
+                    "homepage": "https://github.com/cloudinary/php-transformation-builder-sdk/graphs/contributors"
+                }
+            ],
+            "description": "Cloudinary PHP Transformation Builder SDK",
+            "homepage": "https://github.com/cloudinary/php-transformation-builder-sdk",
+            "keywords": [
+                "cdn",
+                "cloud",
+                "cloudinary",
+                "image management",
+                "sdk"
+            ],
+            "support": {
+                "email": "info@cloudinary.com",
+                "issues": "https://github.com/cloudinary/php-transformation-builder-sdk/issues",
+                "source": "https://github.com/cloudinary/php-transformation-builder-sdk/tree/2.1.2"
+            },
+            "time": "2025-02-03T11:14:03+00:00"
         },
         {
             "name": "dompdf/dompdf",
@@ -1985,63 +2046,6 @@
             "time": "2023-06-26T14:44:25+00:00"
         },
         {
-            "name": "shrikeh/teapot",
-            "version": "v2.3.1",
-            "source": {
-                "type": "git",
-                "url": "https://github.com/shrikeh/teapot.git",
-                "reference": "2fea5720963f22eedb920ee65b9d643bfa3e8daf"
-            },
-            "dist": {
-                "type": "zip",
-                "url": "https://api.github.com/repos/shrikeh/teapot/zipball/2fea5720963f22eedb920ee65b9d643bfa3e8daf",
-                "reference": "2fea5720963f22eedb920ee65b9d643bfa3e8daf",
-                "shasum": ""
-            },
-            "require": {
-                "php": ">=5.5",
-                "psr/http-message": "^1.0",
-                "teapot/status-code": "^1.0"
-            },
-            "require-dev": {
-                "behat/behat": "^3.2",
-                "bossa/phpspec2-expect": "^2.0",
-                "escapestudios/symfony2-coding-standard": "^2.9",
-                "phpspec/phpspec": "~3.0.0",
-                "squizlabs/php_codesniffer": "^2.7"
-            },
-            "type": "library",
-            "autoload": {
-                "psr-4": {
-                    "Teapot\\": "src"
-                }
-            },
-            "notification-url": "https://packagist.org/downloads/",
-            "license": [
-                "MIT"
-            ],
-            "authors": [
-                {
-                    "name": "Barney Hanlon",
-                    "email": "barney@shrikeh.net"
-                },
-                {
-                    "name": "Andreas Möller",
-                    "email": "am@localheinz.com"
-                }
-            ],
-            "description": "PHP HTTP Response Status library",
-            "homepage": "https://shrikeh.github.io/teapot/",
-            "keywords": [
-                "http"
-            ],
-            "support": {
-                "issues": "https://github.com/shrikeh/teapot/issues",
-                "source": "https://github.com/shrikeh/teapot/tree/master"
-            },
-            "time": "2017-09-01T13:56:48+00:00"
-        },
-        {
             "name": "symfony/deprecation-contracts",
             "version": "v3.6.0",
             "source": {
@@ -2595,53 +2599,6 @@
                 }
             ],
             "time": "2025-07-15T08:46:37+00:00"
-        },
-        {
-            "name": "teapot/status-code",
-            "version": "v1.1.2",
-            "source": {
-                "type": "git",
-                "url": "https://github.com/teapot-php/status-code.git",
-                "reference": "7aaba4364645ebb9d3a36267c9b3a32206d3042b"
-            },
-            "dist": {
-                "type": "zip",
-                "url": "https://api.github.com/repos/teapot-php/status-code/zipball/7aaba4364645ebb9d3a36267c9b3a32206d3042b",
-                "reference": "7aaba4364645ebb9d3a36267c9b3a32206d3042b",
-                "shasum": ""
-            },
-            "require": {
-                "php": "^5.4 || ^7.0 || ^8.0"
-            },
-            "require-dev": {
-                "squizlabs/php_codesniffer": "^3.5.8"
-            },
-            "type": "library",
-            "autoload": {
-                "psr-4": {
-                    "Teapot\\StatusCode\\": "src"
-                }
-            },
-            "notification-url": "https://packagist.org/downloads/",
-            "license": [
-                "MIT"
-            ],
-            "authors": [
-                {
-                    "name": "Barney Hanlon",
-                    "email": "barney@shrikeh.net"
-                }
-            ],
-            "description": "PHP HTTP Response Status code library",
-            "homepage": "http://shrikeh.github.com/teapot",
-            "keywords": [
-                "http"
-            ],
-            "support": {
-                "issues": "https://github.com/teapot-php/status-code/issues",
-                "source": "https://github.com/teapot-php/status-code/tree/v1.1.2"
-            },
-            "time": "2020-11-03T17:14:32+00:00"
         },
         {
             "name": "tecnickcom/tcpdf",

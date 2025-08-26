@@ -6,7 +6,7 @@ use App\Models\Message;
 use App\Models\Conversation;
 use App\Models\MessageMedia;
 use App\Domain\Users\User;
-use App\Services\CloudinaryService;
+use App\Support\CloudinaryService;
 use App\Services\WebSocketService;
 use Firebase\JWT\JWT;
 use Firebase\JWT\Key;
@@ -164,19 +164,57 @@ class MessageController extends BaseController
             $mediaUrls = [];
             if (!empty($mediaFiles)) {
                 foreach ($mediaFiles as $file) {
-                    $uploadResult = $this->cloudinaryService->uploadMedia($file);
-                    if ($uploadResult['success']) {
+                    // Kiểm tra xem file đã được upload chưa (có URL)
+                    if (isset($file['url']) && !empty($file['url'])) {
+                        // File đã được upload, chỉ cần lưu vào database
                         $mediaData = [
                             'message_id' => $messageId,
-                            'url' => $uploadResult['url'],
-                            'media_public_id' => $uploadResult['public_id'],
-                            'type' => $uploadResult['type'],
-                            'file_name' => $file['name'] ?? null,
-                            'file_size' => $file['size'] ?? null,
-                            'mime_type' => $file['type'] ?? null
+                            'url' => $file['url'],
+                            'public_id' => $file['public_id'] ?? null,
+                            'type' => $file['type'],
+                            'metadata' => json_encode([
+                                'file_name' => $file['name'] ?? null,
+                                'file_size' => $file['size'] ?? null,
+                                'width' => null,
+                                'height' => null,
+                                'format' => null
+                            ]),
+                            'created_at' => date('Y-m-d H:i:s')
                         ];
                         $this->messageMediaModel->create($mediaData);
-                        $mediaUrls[] = $uploadResult['url'];
+                        $mediaUrls[] = $file['url'];
+                    } else {
+                        // File chưa được upload, cần upload trước
+                        if (isset($file['tmp_name']) && file_exists($file['tmp_name'])) {
+                            $fileContent = file_get_contents($file['tmp_name']);
+                            $base64Data = base64_encode($fileContent);
+                            
+                            // Determine resource type based on file type
+                            $resourceType = 'image';
+                            if (strpos($file['type'], 'video/') === 0) {
+                                $resourceType = 'video';
+                            }
+                            
+                            $uploadResult = $this->cloudinaryService->uploadBase64Image($base64Data, 'messenger', $resourceType);
+                            if ($uploadResult['success']) {
+                                $mediaData = [
+                                    'message_id' => $messageId,
+                                    'url' => $uploadResult['url'],
+                                    'public_id' => $uploadResult['public_id'],
+                                    'type' => $file['type'],
+                                    'metadata' => json_encode([
+                                        'file_name' => $file['name'] ?? null,
+                                        'file_size' => $file['size'] ?? null,
+                                        'width' => $uploadResult['width'] ?? null,
+                                        'height' => $uploadResult['height'] ?? null,
+                                        'format' => $uploadResult['format'] ?? null
+                                    ]),
+                                    'created_at' => date('Y-m-d H:i:s')
+                                ];
+                                $this->messageMediaModel->create($mediaData);
+                                $mediaUrls[] = $uploadResult['url'];
+                            }
+                        }
                     }
                 }
             }
@@ -184,17 +222,14 @@ class MessageController extends BaseController
             // Cập nhật thời gian cuối của conversation
             $this->conversationModel->updateLastUpdated($conversationId);
 
+            // Lấy thông tin tin nhắn đầy đủ để gửi qua WebSocket
+            $fullMessage = $this->messageModel->getById($messageId);
+            
             // Gửi thông báo realtime
             $this->webSocketService->broadcastMessage([
                 'type' => 'new_message',
                 'conversation_id' => $conversationId,
-                'message' => [
-                    'message_id' => $messageId,
-                    'sender_id' => $user['user_id'],
-                    'content' => $content,
-                    'media_urls' => $mediaUrls,
-                    'sent_at' => $messageData['sent_at']
-                ]
+                'message' => $fullMessage
             ]);
 
             http_response_code(200);
@@ -202,10 +237,7 @@ class MessageController extends BaseController
                 'success' => true,
                 'message' => 'Message sent successfully',
                 'status_code' => 200,
-                'data' => [
-                    'message_id' => $messageId,
-                    'media_urls' => $mediaUrls
-                ]
+                'data' => $fullMessage
             ]);
 
         } catch (\Exception $e) {
@@ -327,6 +359,10 @@ class MessageController extends BaseController
     // Upload media
     public function uploadMedia()
     {
+        // Disable error display to prevent HTML output
+        error_reporting(0);
+        ini_set('display_errors', 0);
+        
         try {
             $user = $this->getCurrentUser();
             if (!$user) {
@@ -339,29 +375,68 @@ class MessageController extends BaseController
                 return;
             }
 
-            $file = $this->request->getFile('media');
-            if (!$file || !$file->isValid()) {
+            // Get uploaded file from $_FILES
+            if (!isset($_FILES['media']) || $_FILES['media']['error'] !== UPLOAD_ERR_OK) {
                 http_response_code(400);
                 echo json_encode([
                     'success' => false,
-                    'message' => 'Invalid file',
+                    'message' => 'Invalid file upload',
                     'status_code' => 400
                 ]);
                 return;
             }
 
-            $uploadResult = $this->cloudinaryService->uploadMedia([
-                'tmp_name' => $file->getTempName(),
-                'name' => $file->getName(),
-                'size' => $file->getSize(),
-                'type' => $file->getMimeType()
-            ]);
+            $file = $_FILES['media'];
+            
+            // Validate file type
+            $allowedTypes = [
+                'image/jpeg', 'image/jpg', 'image/png', 'image/gif', 'image/webp',
+                'video/mp4', 'video/avi', 'video/mov', 'video/wmv', 'video/flv'
+            ];
+            
+            if (!in_array($file['type'], $allowedTypes)) {
+                http_response_code(400);
+                echo json_encode([
+                    'success' => false,
+                    'message' => 'Unsupported file type: ' . $file['type'],
+                    'status_code' => 400
+                ]);
+                return;
+            }
+
+            // Validate file size (50MB max)
+            $maxSize = 50 * 1024 * 1024;
+            if ($file['size'] > $maxSize) {
+                http_response_code(400);
+                echo json_encode([
+                    'success' => false,
+                    'message' => 'File too large. Maximum size is 50MB',
+                    'status_code' => 400
+                ]);
+                return;
+            }
+
+            error_log('Starting upload for file: ' . $file['name']);
+            
+            // Convert file to base64
+            $fileContent = file_get_contents($file['tmp_name']);
+            $base64Data = base64_encode($fileContent);
+            
+            // Determine resource type based on file type
+            $resourceType = 'image';
+            if (strpos($file['type'], 'video/') === 0) {
+                $resourceType = 'video';
+            }
+            
+            // Upload to Cloudinary using base64
+            $uploadResult = $this->cloudinaryService->uploadBase64Image($base64Data, 'messenger', $resourceType);
+            error_log('Upload result: ' . json_encode($uploadResult));
 
             if (!$uploadResult['success']) {
                 http_response_code(500);
                 echo json_encode([
                     'success' => false,
-                    'message' => 'Upload failed',
+                    'message' => 'Upload failed: ' . ($uploadResult['error'] ?? 'Unknown error'),
                     'status_code' => 500
                 ]);
                 return;
@@ -375,11 +450,15 @@ class MessageController extends BaseController
                 'data' => [
                     'url' => $uploadResult['url'],
                     'public_id' => $uploadResult['public_id'],
-                    'type' => $uploadResult['type']
+                    'type' => $file['type'], // Use original file type
+                    'file_name' => $file['name'],
+                    'file_size' => $file['size']
                 ]
             ]);
 
         } catch (\Exception $e) {
+            error_log('Upload media error: ' . $e->getMessage());
+            error_log('Upload media error trace: ' . $e->getTraceAsString());
             http_response_code(500);
             echo json_encode([
                 'success' => false,

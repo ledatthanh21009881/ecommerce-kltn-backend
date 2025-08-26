@@ -83,12 +83,12 @@ class CloudinaryService
         }
     }
     
-    public function uploadBase64Image(string $base64Data, ?string $folder = null): array
+    public function uploadBase64Image(string $base64Data, ?string $folder = null, ?string $resourceType = null): array
     {
         try {
             // Clean base64 data
             if (strpos($base64Data, 'data:') === 0) {
-                $base64Data = preg_replace('/^data:image\/[a-zA-Z]+;base64,/', '', $base64Data);
+                $base64Data = preg_replace('/^data:[a-zA-Z]+\/[a-zA-Z]+;base64,/', '', $base64Data);
             }
             
             // Decode base64 to binary
@@ -120,7 +120,9 @@ class CloudinaryService
             
             $postData = array_merge($params, $fileData);
             
-            $url = "https://api.cloudinary.com/v1_1/{$this->cloudName}/image/upload";
+            // Use video upload endpoint for videos, image for images
+            $resourceType = $resourceType ?? 'image';
+            $url = "https://api.cloudinary.com/v1_1/{$this->cloudName}/{$resourceType}/upload";
             
             $ch = curl_init();
             curl_setopt($ch, CURLOPT_URL, $url);
@@ -155,10 +157,14 @@ class CloudinaryService
                 throw new \Exception("Cloudinary error: " . $result['error']['message']);
             }
             
+            // Determine MIME type from format
+            $mimeType = 'image/' . ($result['format'] ?? 'jpeg');
+            
             return [
                 'success' => true,
                 'public_id' => $result['public_id'],
                 'url' => $result['secure_url'],
+                'type' => $mimeType,
                 'width' => $result['width'] ?? 0,
                 'height' => $result['height'] ?? 0,
                 'format' => $result['format'] ?? 'unknown'

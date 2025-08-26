@@ -19,7 +19,8 @@ class Message
 
     public function getMessagesByConversation($conversationId, $limit = 50, $offset = 0)
     {
-        $sql = "SELECT m.*, u.first_name, u.last_name, u.email, u.avatar_url
+        $sql = "SELECT m.*, u.first_name, u.last_name, u.email, u.avatar_url,
+                       DATE_FORMAT(m.sent_at, '%Y-%m-%d %H:%i:%s') as sent_at
                 FROM messages m
                 JOIN users u ON u.user_id = m.sender_id
                 WHERE m.conversation_id = ? AND m.deleted_at IS NULL
@@ -75,5 +76,24 @@ class Message
             $data['sent_at']
         ]);
         return $this->db->lastInsertId();
+    }
+
+    public function getById($messageId)
+    {
+        $sql = "SELECT m.*, u.first_name, u.last_name, u.email, u.avatar_url,
+                       DATE_FORMAT(m.sent_at, '%Y-%m-%d %H:%i:%s') as sent_at
+                FROM messages m
+                JOIN users u ON u.user_id = m.sender_id
+                WHERE m.message_id = ? AND m.deleted_at IS NULL";
+        
+        $stmt = $this->db->prepare($sql);
+        $stmt->execute([$messageId]);
+        $message = $stmt->fetch(\PDO::FETCH_ASSOC);
+
+        if ($message) {
+            $message['media'] = $this->getMessageMedia($message['message_id']);
+        }
+
+        return $message;
     }
 }
