@@ -7,6 +7,7 @@ use App\Models\Conversation;
 use App\Models\MessageMedia;
 use App\Domain\Users\User;
 use App\Support\CloudinaryService;
+use App\Support\MessengerCloudinaryService;
 use App\Services\WebSocketService;
 use Firebase\JWT\JWT;
 use Firebase\JWT\Key;
@@ -20,6 +21,7 @@ class MessageController extends BaseController
     protected $messageMediaModel;
     protected $userModel;
     protected $cloudinaryService;
+    protected $messengerCloudinaryService;
     protected $webSocketService;
 
     public function __construct($container = null)
@@ -30,6 +32,7 @@ class MessageController extends BaseController
         $this->messageMediaModel = new MessageMedia($container);
         $this->userModel = new User($container);
         $this->cloudinaryService = new CloudinaryService();
+        $this->messengerCloudinaryService = new MessengerCloudinaryService();
         $this->webSocketService = new WebSocketService();
     }
 
@@ -139,6 +142,7 @@ class MessageController extends BaseController
             $conversationId = $input['conversation_id'] ?? null;
             $content = $input['content'] ?? '';
             $mediaFiles = $input['media'] ?? [];
+            $isLink = $input['is_link'] ?? false;
 
             if (!$conversationId) {
                 http_response_code(400);
@@ -155,7 +159,8 @@ class MessageController extends BaseController
                 'conversation_id' => $conversationId,
                 'sender_id' => $user['user_id'],
                 'content' => $content,
-                'sent_at' => date('Y-m-d H:i:s')
+                'sent_at' => date('Y-m-d H:i:s'),
+                'is_link' => $isLink
             ];
 
             $messageId = $this->messageModel->create($messageData);
@@ -195,7 +200,7 @@ class MessageController extends BaseController
                                 $resourceType = 'video';
                             }
                             
-                            $uploadResult = $this->cloudinaryService->uploadBase64Image($base64Data, 'messenger', $resourceType);
+                            $uploadResult = $this->messengerCloudinaryService->uploadBase64Image($base64Data, 'messenger', $resourceType);
                             if ($uploadResult['success']) {
                                 $mediaData = [
                                     'message_id' => $messageId,
@@ -429,7 +434,7 @@ class MessageController extends BaseController
             }
             
             // Upload to Cloudinary using base64
-            $uploadResult = $this->cloudinaryService->uploadBase64Image($base64Data, 'messenger', $resourceType);
+            $uploadResult = $this->messengerCloudinaryService->uploadBase64Image($base64Data, 'messenger', $resourceType);
             error_log('Upload result: ' . json_encode($uploadResult));
 
             if (!$uploadResult['success']) {
@@ -514,7 +519,7 @@ class MessageController extends BaseController
             // Xóa media từ Cloudinary
             foreach ($mediaFiles as $media) {
                 if (!empty($media['public_id'])) {
-                    $this->cloudinaryService->deleteImage($media['public_id']);
+                    $this->messengerCloudinaryService->deleteImage($media['public_id']);
                 }
             }
 

@@ -66,14 +66,15 @@ class Message
 
     public function create($data)
     {
-        $sql = "INSERT INTO messages (conversation_id, sender_id, content, sent_at) 
-                VALUES (?, ?, ?, ?)";
+        $sql = "INSERT INTO messages (conversation_id, sender_id, content, sent_at, is_link) 
+                VALUES (?, ?, ?, ?, ?)";
         $stmt = $this->db->prepare($sql);
         $stmt->execute([
             $data['conversation_id'],
             $data['sender_id'],
             $data['content'],
-            $data['sent_at']
+            $data['sent_at'],
+            $data['is_link'] ?? false
         ]);
         return $this->db->lastInsertId();
     }
