@@ -12,11 +12,13 @@ class WebSocketService implements MessageComponentInterface
 {
     protected $clients;
     protected $userConnections;
+    protected $clientConversations; // Add this to store conversations for each client
 
     public function __construct()
     {
         $this->clients = new \SplObjectStorage;
         $this->userConnections = [];
+        $this->clientConversations = []; // Initialize conversations storage
     }
 
     public function onOpen(ConnectionInterface $conn)
@@ -27,19 +29,35 @@ class WebSocketService implements MessageComponentInterface
 
     public function onMessage(ConnectionInterface $from, $msg)
     {
+        echo "Received message: {$msg}\n";
         $data = json_decode($msg, true);
         
-        if (!$data) return;
+        if (!$data) {
+            echo "Failed to decode JSON message\n";
+            return;
+        }
+
+        echo "Message type: {$data['type']}\n";
 
         switch ($data['type']) {
             case 'auth':
                 $this->authenticateUser($from, $data['token']);
                 break;
             case 'join_conversation':
+                echo "Joining conversation: {$data['conversation_id']}\n";
                 $this->joinConversation($from, $data['conversation_id']);
                 break;
             case 'leave_conversation':
+                echo "Leaving conversation: {$data['conversation_id']}\n";
                 $this->leaveConversation($from, $data['conversation_id']);
+                break;
+            case 'typing_start':
+                echo "Typing start for conversation: {$data['conversation_id']}\n";
+                $this->broadcastTyping($from, $data['conversation_id'], 'typing_start');
+                break;
+            case 'typing_stop':
+                echo "Typing stop for conversation: {$data['conversation_id']}\n";
+                $this->broadcastTyping($from, $data['conversation_id'], 'typing_stop');
                 break;
         }
     }
@@ -48,6 +66,13 @@ class WebSocketService implements MessageComponentInterface
     {
         $this->clients->detach($conn);
         $this->removeUserConnection($conn);
+        
+        // Clean up conversations for this client
+        $clientId = $conn->resourceId;
+        if (isset($this->clientConversations[$clientId])) {
+            unset($this->clientConversations[$clientId]);
+        }
+        
         echo "Connection {$conn->resourceId} has disconnected\n";
     }
 
@@ -83,30 +108,38 @@ class WebSocketService implements MessageComponentInterface
 
     protected function joinConversation($conn, $conversationId)
     {
-        if (!isset($conn->userId)) return;
-        
-        if (!isset($conn->conversations)) {
-            $conn->conversations = [];
+        if (!isset($conn->userId)) {
+            echo "Cannot join conversation: no user ID\n";
+            return;
         }
         
-        // Convert to array if it's not already
-        if (!is_array($conn->conversations)) {
-            $conn->conversations = [];
+        // Store conversations in our own array using resourceId as key
+        $clientId = $conn->resourceId;
+        
+        if (!isset($this->clientConversations[$clientId])) {
+            $this->clientConversations[$clientId] = [];
         }
         
         // Add conversation if not already present
-        if (!in_array($conversationId, $conn->conversations)) {
-            $conn->conversations[] = $conversationId;
+        if (!in_array($conversationId, $this->clientConversations[$clientId])) {
+            $this->clientConversations[$clientId][] = $conversationId;
         }
         
         echo "User {$conn->userId} joined conversation {$conversationId}\n";
+        echo "User conversations: " . implode(', ', $this->clientConversations[$clientId]) . "\n";
+        
+        // Debug: Check if conversation was actually added
+        echo "Debug - Conversations after join: ";
+        var_dump($this->clientConversations[$clientId]);
     }
 
     protected function leaveConversation($conn, $conversationId)
     {
-        if (!isset($conn->conversations)) return;
+        $clientId = $conn->resourceId;
         
-        $conn->conversations = array_filter($conn->conversations, function($id) use ($conversationId) {
+        if (!isset($this->clientConversations[$clientId])) return;
+        
+        $this->clientConversations[$clientId] = array_filter($this->clientConversations[$clientId], function($id) use ($conversationId) {
             return $id != $conversationId;
         });
         
@@ -122,13 +155,59 @@ class WebSocketService implements MessageComponentInterface
 
     public function broadcastMessage($data)
     {
-        $message = json_encode($data);
+        // This method is called by backend when a new message is saved
+        // We need to broadcast to the Socket.IO server on port 3001
+        // Since we can't directly communicate between servers, we'll use a file-based approach
         
+        $broadcastData = [
+            'type' => 'backend_message',
+            'conversation_id' => $data['conversation_id'],
+            'message' => $data['message'],
+            'timestamp' => time()
+        ];
+        
+        // Write to a temporary file that Socket.IO server can read
+        $broadcastFile = __DIR__ . '/../../broadcast_queue.json';
+        $queue = [];
+        
+        if (file_exists($broadcastFile)) {
+            $queue = json_decode(file_get_contents($broadcastFile), true) ?: [];
+        }
+        
+        $queue[] = $broadcastData;
+        file_put_contents($broadcastFile, json_encode($queue));
+    }
+
+    protected function broadcastTyping($from, $conversationId, $typingType)
+    {
+        echo "Broadcasting typing: {$typingType} for conversation: {$conversationId}\n";
+        echo "Total clients: " . count($this->clients) . "\n";
+        echo "From client ID: {$from->resourceId}\n";
+        
+        $typingData = [
+            'type' => $typingType,
+            'conversation_id' => $conversationId
+        ];
+
+        $sentCount = 0;
         foreach ($this->clients as $client) {
-            if (isset($client->conversations) && in_array($data['conversation_id'], $client->conversations)) {
-                $client->send($message);
+            $clientId = $client->resourceId;
+            echo "Checking client {$clientId}: ";
+            echo "Is not from: " . ($client !== $from ? 'yes' : 'no') . ", ";
+            echo "Has conversations: " . (isset($this->clientConversations[$clientId]) ? 'yes' : 'no') . ", ";
+            if (isset($this->clientConversations[$clientId])) {
+                echo "Conversations: " . implode(', ', $this->clientConversations[$clientId]) . ", ";
+                echo "In conversation: " . (in_array($conversationId, $this->clientConversations[$clientId]) ? 'yes' : 'no');
+            }
+            echo "\n";
+            
+            if ($client !== $from && isset($this->clientConversations[$clientId]) && in_array($conversationId, $this->clientConversations[$clientId])) {
+                $client->send(json_encode($typingData));
+                $sentCount++;
+                echo "Sent typing message to client {$clientId}\n";
             }
         }
+        echo "Sent typing message to {$sentCount} clients\n";
     }
 
     public function sendToUser($userId, $data)

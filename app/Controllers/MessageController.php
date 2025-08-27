@@ -51,6 +51,51 @@ class MessageController extends BaseController
                 return;
             }
 
+            // Check if customer_id is provided in query params
+            $customerId = $_GET['customer_id'] ?? null;
+            
+            if ($customerId) {
+                // Get conversation for specific customer
+                $conversation = $this->conversationModel->getByCustomerId($customerId);
+                if ($conversation) {
+                    http_response_code(200);
+                    echo json_encode([
+                        'success' => true,
+                        'message' => 'Success',
+                        'status_code' => 200,
+                        'data' => [
+                            'items' => [$conversation],
+                            'pagination' => [
+                                'total' => 1,
+                                'per_page' => 50,
+                                'current_page' => 1,
+                                'last_page' => 1
+                            ]
+                        ]
+                    ]);
+                    return;
+                } else {
+                    // No conversation found for this customer
+                    http_response_code(200);
+                    echo json_encode([
+                        'success' => true,
+                        'message' => 'No conversation found',
+                        'status_code' => 200,
+                        'data' => [
+                            'items' => [],
+                            'pagination' => [
+                                'total' => 0,
+                                'per_page' => 50,
+                                'current_page' => 1,
+                                'last_page' => 1
+                            ]
+                        ]
+                    ]);
+                    return;
+                }
+            }
+
+            // Get all conversations (for admin)
             $conversations = $this->conversationModel->getConversationsWithLastMessage();
             
             http_response_code(200);
