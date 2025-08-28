@@ -236,16 +236,25 @@ class MessageController extends BaseController
                     } else {
                         // File chưa được upload, cần upload trước
                         if (isset($file['tmp_name']) && file_exists($file['tmp_name'])) {
-                            $fileContent = file_get_contents($file['tmp_name']);
-                            $base64Data = base64_encode($fileContent);
+                            $uploadResult = null;
                             
-                            // Determine resource type based on file type
-                            $resourceType = 'image';
-                            if (strpos($file['type'], 'video/') === 0) {
-                                $resourceType = 'video';
+                            if (strpos($file['type'], 'audio/') === 0) {
+                                // Use special method for audio files
+                                $uploadResult = $this->messengerCloudinaryService->uploadAudioFile($file, 'messenger');
+                            } else {
+                                // Use base64 method for images and videos
+                                $fileContent = file_get_contents($file['tmp_name']);
+                                $base64Data = base64_encode($fileContent);
+                                
+                                // Determine resource type based on file type
+                                $resourceType = 'image';
+                                if (strpos($file['type'], 'video/') === 0) {
+                                    $resourceType = 'video';
+                                }
+                                
+                                $uploadResult = $this->messengerCloudinaryService->uploadBase64Image($base64Data, 'messenger', $resourceType);
                             }
                             
-                            $uploadResult = $this->messengerCloudinaryService->uploadBase64Image($base64Data, 'messenger', $resourceType);
                             if ($uploadResult['success']) {
                                 $mediaData = [
                                     'message_id' => $messageId,
@@ -257,7 +266,8 @@ class MessageController extends BaseController
                                         'file_size' => $file['size'] ?? null,
                                         'width' => $uploadResult['width'] ?? null,
                                         'height' => $uploadResult['height'] ?? null,
-                                        'format' => $uploadResult['format'] ?? null
+                                        'format' => $uploadResult['format'] ?? null,
+                                        'duration' => $uploadResult['duration'] ?? null
                                     ]),
                                     'created_at' => date('Y-m-d H:i:s')
                                 ];
@@ -413,6 +423,8 @@ class MessageController extends BaseController
         error_reporting(0);
         ini_set('display_errors', 0);
         
+        error_log('Upload media method called');
+        
         try {
             $user = $this->getCurrentUser();
             if (!$user) {
@@ -437,11 +449,13 @@ class MessageController extends BaseController
             }
 
             $file = $_FILES['media'];
+            error_log('File received: ' . json_encode($file));
             
             // Validate file type
             $allowedTypes = [
                 'image/jpeg', 'image/jpg', 'image/png', 'image/gif', 'image/webp',
-                'video/mp4', 'video/avi', 'video/mov', 'video/wmv', 'video/flv'
+                'video/mp4', 'video/avi', 'video/mov', 'video/wmv', 'video/flv',
+                'audio/mp3', 'audio/wav', 'audio/ogg', 'audio/webm', 'audio/m4a'
             ];
             
             if (!in_array($file['type'], $allowedTypes)) {
@@ -478,8 +492,15 @@ class MessageController extends BaseController
                 $resourceType = 'video';
             }
             
-            // Upload to Cloudinary using base64
-            $uploadResult = $this->messengerCloudinaryService->uploadBase64Image($base64Data, 'messenger', $resourceType);
+            // Upload to Cloudinary
+            $uploadResult = null;
+            if (strpos($file['type'], 'audio/') === 0) {
+                // Use special method for audio files
+                $uploadResult = $this->messengerCloudinaryService->uploadAudioFile($file, 'messenger');
+            } else {
+                // Use base64 method for images and videos
+                $uploadResult = $this->messengerCloudinaryService->uploadBase64Image($base64Data, 'messenger', $resourceType);
+            }
             error_log('Upload result: ' . json_encode($uploadResult));
 
             if (!$uploadResult['success']) {

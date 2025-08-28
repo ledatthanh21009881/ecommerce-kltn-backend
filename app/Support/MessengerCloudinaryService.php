@@ -113,11 +113,86 @@ class MessengerCloudinaryService
             ];
         }
     }
+
+    public function uploadAudioFile($file, ?string $folder = null): array
+    {
+        try {
+            $timestamp = time();
+            
+            $params = [
+                'timestamp' => $timestamp,
+                'folder' => $folder ?? 'messenger/audio',
+                'use_filename' => true,
+                'unique_filename' => true,
+                'resource_type' => 'video' // Cloudinary uses 'video' resource type for audio files
+            ];
+            
+            $signature = $this->generateSignature($params);
+            $params['signature'] = $signature;
+            $params['api_key'] = $this->apiKey;
+            
+            $fileData = [
+                'file' => new \CURLFile($file['tmp_name'], $file['type'], $file['name'])
+            ];
+            
+            $postData = array_merge($params, $fileData);
+            
+            $url = "https://api.cloudinary.com/v1_1/{$this->cloudName}/video/upload";
+            
+            $ch = curl_init();
+            curl_setopt($ch, CURLOPT_URL, $url);
+            curl_setopt($ch, CURLOPT_POST, true);
+            curl_setopt($ch, CURLOPT_POSTFIELDS, $postData);
+            curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+            curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+            curl_setopt($ch, CURLOPT_TIMEOUT, 60); // Longer timeout for audio files
+            
+            $response = curl_exec($ch);
+            $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+            $curlError = curl_error($ch);
+            curl_close($ch);
+            
+            if ($curlError) {
+                throw new \Exception("cURL error: $curlError");
+            }
+            
+            if ($httpCode !== 200) {
+                throw new \Exception("Cloudinary upload failed with HTTP code: $httpCode. Response: $response");
+            }
+            
+            $result = json_decode($response, true);
+            if (!$result) {
+                throw new \Exception("Invalid JSON response from Cloudinary: $response");
+            }
+            
+            if (isset($result['error'])) {
+                throw new \Exception("Cloudinary error: " . $result['error']['message']);
+            }
+            
+            // Determine MIME type from format
+            $mimeType = 'audio/' . ($result['format'] ?? 'webm');
+            
+            return [
+                'success' => true,
+                'public_id' => $result['public_id'],
+                'url' => $result['secure_url'],
+                'type' => $mimeType,
+                'duration' => $result['duration'] ?? 0,
+                'format' => $result['format'] ?? 'unknown'
+            ];
+            
+        } catch (\Exception $e) {
+            return [
+                'success' => false,
+                'error' => $e->getMessage()
+            ];
+        }
+    }
     
     private function generateSignature(array $params): string
     {
-        // Remove signature, file, and api_key from params if present
-        unset($params['signature'], $params['file'], $params['api_key']);
+        // Remove signature, file, api_key, and resource_type from params if present
+        unset($params['signature'], $params['file'], $params['api_key'], $params['resource_type']);
         
         // Sort parameters
         ksort($params);
@@ -125,7 +200,7 @@ class MessengerCloudinaryService
         // Build query string
         $query = [];
         foreach ($params as $key => $value) {
-            if (!empty($value)) {
+            if ($value !== null && $value !== '') {
                 $query[] = $key . '=' . $value;
             }
         }
