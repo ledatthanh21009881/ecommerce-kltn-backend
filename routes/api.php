@@ -1,7 +1,7 @@
 <?php
 declare(strict_types=1);
 
-use App\Controllers\{AuthController, ProductController, ProductImageController, OrderController, AdminController, CategoryController, CustomerController, ShipperController, UserController, RoleController, InventoryController, InvoiceController, VoucherController, MessageController};
+use App\Controllers\{AuthController, ProductController, ProductImageController, OrderController, AdminController, CategoryController, CustomerController, ShipperController, UserController, RoleController, InventoryController, InvoiceController, VoucherController, MessageController, ShippingController};
 use App\Middlewares\{AuthMiddleware, AdminMiddleware};
 
 // Debug test route
@@ -97,6 +97,16 @@ $router->put('/api/backend/v1/vouchers/{id}', [VoucherController::class, 'update
 $router->delete('/api/backend/v1/vouchers/{id}', [VoucherController::class, 'destroy'], [new AuthMiddleware($container)]);
 $router->get('/api/backend/v1/vouchers/{id}/usage-stats', [VoucherController::class, 'usageStats'], [new AuthMiddleware($container)]);
 $router->put('/api/backend/v1/vouchers/{id}/toggle-status', [VoucherController::class, 'toggleStatus'], [new AuthMiddleware($container)]);
+
+// ========================================
+// SHIPPING MANAGEMENT ROUTES
+// ========================================
+$router->get('/api/backend/v1/shipping', [ShippingController::class, 'index'], [new AuthMiddleware($container)]);
+$router->get('/api/backend/v1/shipping/{id}', [ShippingController::class, 'show'], [new AuthMiddleware($container)]);
+$router->post('/api/backend/v1/shipping', [ShippingController::class, 'store'], [new AuthMiddleware($container)]);
+$router->put('/api/backend/v1/shipping/{id}', [ShippingController::class, 'update'], [new AuthMiddleware($container)]);
+$router->delete('/api/backend/v1/shipping/{id}', [ShippingController::class, 'destroy'], [new AuthMiddleware($container)]);
+$router->patch('/api/backend/v1/shipping/{id}/toggle', [ShippingController::class, 'toggleStatus'], [new AuthMiddleware($container)]);
 
 // ========================================
 // BACKEND MESSAGING API ROUTES (FOR ADMIN FRONTEND)
