@@ -68,4 +68,12 @@ class Request
     {
         return isset($this->attributes[$name]);
     }
+
+    /**
+     * Set query parameter (for internal use)
+     */
+    public function setQueryParam(string $key, mixed $value): void
+    {
+        $_GET[$key] = $value;
+    }
 }

@@ -1,7 +1,7 @@
 <?php
 declare(strict_types=1);
 
-use App\Controllers\{AuthController, ProductController, ProductImageController, OrderController, AdminController, CategoryController, CustomerController, ShipperController, UserController, RoleController, InventoryController, InvoiceController, VoucherController, MessageController, ShippingController};
+use App\Controllers\{AuthController, ProductController, ProductImageController, OrderController, AdminController, CategoryController, CustomerController, ShipperController, UserController, RoleController, InventoryController, InvoiceController, VoucherController, MessageController, ShippingController, CartController, SupplierController, PurchaseReceiptController};
 use App\Middlewares\{AuthMiddleware, AdminMiddleware};
 
 // Debug test route
@@ -107,6 +107,15 @@ $router->post('/api/backend/v1/shipping', [ShippingController::class, 'store'], 
 $router->put('/api/backend/v1/shipping/{id}', [ShippingController::class, 'update'], [new AuthMiddleware($container)]);
 $router->delete('/api/backend/v1/shipping/{id}', [ShippingController::class, 'destroy'], [new AuthMiddleware($container)]);
 $router->patch('/api/backend/v1/shipping/{id}/toggle', [ShippingController::class, 'toggleStatus'], [new AuthMiddleware($container)]);
+
+// ========================================
+// CART MANAGEMENT ROUTES
+// ========================================
+$router->get('/api/backend/v1/cart', [CartController::class, 'index'], [new AuthMiddleware($container)]);
+$router->post('/api/backend/v1/cart/add', [CartController::class, 'addItem'], [new AuthMiddleware($container)]);
+$router->put('/api/backend/v1/cart/update/{item_id}', [CartController::class, 'updateItem'], [new AuthMiddleware($container)]);
+$router->delete('/api/backend/v1/cart/remove/{item_id}', [CartController::class, 'removeItem'], [new AuthMiddleware($container)]);
+$router->post('/api/backend/v1/cart/sync', [CartController::class, 'syncCart'], [new AuthMiddleware($container)]);
 
 // ========================================
 // BACKEND MESSAGING API ROUTES (FOR ADMIN FRONTEND)
@@ -581,3 +590,37 @@ $router->get('/api/test/order-controller-shippers', function($req, $res) use ($c
         ]);
     }
 });
+
+// ========================================
+// SUPPLIER MANAGEMENT API ROUTES
+// ========================================
+$router->get('/api/v1/suppliers', [SupplierController::class, 'index'], [new AuthMiddleware($container)]);
+$router->get('/api/v1/suppliers/stats', [SupplierController::class, 'getStats'], [new AuthMiddleware($container)]);
+$router->post('/api/v1/suppliers', [SupplierController::class, 'store'], [new AuthMiddleware($container)]);
+$router->put('/api/v1/suppliers', [SupplierController::class, 'update'], [new AuthMiddleware($container)]);
+$router->delete('/api/v1/suppliers', [SupplierController::class, 'delete'], [new AuthMiddleware($container)]);
+
+// Backend API routes (for admin frontend)
+$router->get('/api/backend/v1/suppliers', [SupplierController::class, 'index'], [new AuthMiddleware($container)]);
+$router->get('/api/backend/v1/suppliers/stats', [SupplierController::class, 'getStats'], [new AuthMiddleware($container)]);
+$router->post('/api/backend/v1/suppliers', [SupplierController::class, 'store'], [new AuthMiddleware($container)]);
+$router->put('/api/backend/v1/suppliers', [SupplierController::class, 'update'], [new AuthMiddleware($container)]);
+$router->delete('/api/backend/v1/suppliers', [SupplierController::class, 'delete'], [new AuthMiddleware($container)]);
+
+// ========================================
+// PURCHASE RECEIPT MANAGEMENT API ROUTES
+// ========================================
+$router->get('/api/v1/purchase-receipts', [PurchaseReceiptController::class, 'index'], [new AuthMiddleware($container)]);
+$router->get('/api/v1/purchase-receipts/by-supplier', [PurchaseReceiptController::class, 'getBySupplier'], [new AuthMiddleware($container)]);
+$router->post('/api/v1/purchase-receipts', [PurchaseReceiptController::class, 'store'], [new AuthMiddleware($container)]);
+$router->post('/api/v1/purchase-receipts/confirm', [PurchaseReceiptController::class, 'confirm'], [new AuthMiddleware($container)]);
+$router->put('/api/v1/purchase-receipts', [PurchaseReceiptController::class, 'update'], [new AuthMiddleware($container)]);
+$router->delete('/api/v1/purchase-receipts', [PurchaseReceiptController::class, 'delete'], [new AuthMiddleware($container)]);
+
+// Backend API routes (for admin frontend)
+$router->get('/api/backend/v1/purchase-receipts', [PurchaseReceiptController::class, 'index'], [new AuthMiddleware($container)]);
+$router->get('/api/backend/v1/purchase-receipts/by-supplier', [PurchaseReceiptController::class, 'getBySupplier'], [new AuthMiddleware($container)]);
+$router->post('/api/backend/v1/purchase-receipts', [PurchaseReceiptController::class, 'store'], [new AuthMiddleware($container)]);
+$router->post('/api/backend/v1/purchase-receipts/confirm', [PurchaseReceiptController::class, 'confirm'], [new AuthMiddleware($container)]);
+$router->put('/api/backend/v1/purchase-receipts', [PurchaseReceiptController::class, 'update'], [new AuthMiddleware($container)]);
+$router->delete('/api/backend/v1/purchase-receipts', [PurchaseReceiptController::class, 'delete'], [new AuthMiddleware($container)]);
