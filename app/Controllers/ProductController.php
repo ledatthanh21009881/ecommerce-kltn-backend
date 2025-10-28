@@ -967,9 +967,45 @@ class ProductController extends Controller
          $stmt->execute();
          return $stmt->fetchAll(PDO::FETCH_ASSOC);
      }
-     
 
-     
-
-     
-     }
+    /**
+     * GET /api/v1/products/variants - Lấy tất cả product variants
+     */
+    public function getAllVariants(Request $req, Response $res)
+    {
+        try {
+            $pdo = $this->container->database()->getConnection();
+            
+            $sql = "SELECT 
+                        pv.variant_id,
+                        pv.product_id,
+                        pv.size_id,
+                        pv.sku,
+                        pv.stock_quantity,
+                        pv.status,
+                        p.product_name,
+                        s.size_name,
+                        CONCAT(p.product_name, ' - ', s.size_name) as display_name
+                    FROM product_variants pv
+                    JOIN products p ON pv.product_id = p.product_id
+                    JOIN sizes s ON pv.size_id = s.size_id
+                    WHERE pv.is_active = 1
+                    ORDER BY p.product_name, s.size_name";
+            
+            $stmt = $pdo->query($sql);
+            $variants = $stmt->fetchAll(PDO::FETCH_ASSOC);
+            
+            // Convert strings to numbers
+            foreach ($variants as &$variant) {
+                $variant['variant_id'] = (int)$variant['variant_id'];
+                $variant['product_id'] = (int)$variant['product_id'];
+                $variant['size_id'] = (int)$variant['size_id'];
+                $variant['stock_quantity'] = (int)$variant['stock_quantity'];
+            }
+            
+            return $res->json(ResponseHelper::success($variants, 'Variants retrieved successfully'));
+        } catch (Exception $e) {
+            return $res->json(ResponseHelper::serverError('Failed to fetch variants: ' . $e->getMessage()));
+        }
+    }
+}

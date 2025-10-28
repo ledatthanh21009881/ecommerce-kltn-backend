@@ -33,12 +33,10 @@ use Exception;
 class PurchaseReceiptController extends Controller
 {
     private PDO $pdo;
-    private Container $container;
 
     public function __construct(Container $container)
     {
         parent::__construct($container);
-        $this->container = $container;
         $this->pdo = $container->database()->getConnection();
     }
 

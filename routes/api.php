@@ -377,6 +377,7 @@ $router->patch('/api/v1/categories/{id}/toggle-status', [CategoryController::cla
 $router->get('/api/v1/products', [ProductController::class, 'index']);
 $router->get('/api/v1/products/featured', [ProductController::class, 'featured']);
 $router->get('/api/v1/products/search', [ProductController::class, 'search']);
+$router->get('/api/v1/products/variants', [ProductController::class, 'getAllVariants'], [new AuthMiddleware($container)]);
 $router->get('/api/v1/products/{id}', [ProductController::class, 'show']);
 $router->post('/api/v1/products', [ProductController::class, 'store'], [new AuthMiddleware($container)]);
 $router->put('/api/v1/products/{id}', [ProductController::class, 'update'], [new AuthMiddleware($container)]);
