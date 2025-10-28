@@ -603,6 +603,7 @@ $router->delete('/api/v1/suppliers', [SupplierController::class, 'delete'], [new
 // Backend API routes (for admin frontend)
 $router->get('/api/backend/v1/suppliers', [SupplierController::class, 'index'], [new AuthMiddleware($container)]);
 $router->get('/api/backend/v1/suppliers/stats', [SupplierController::class, 'getStats'], [new AuthMiddleware($container)]);
+$router->get('/api/backend/v1/suppliers/stats-detail', [SupplierController::class, 'getDetailStats'], [new AuthMiddleware($container)]);
 $router->post('/api/backend/v1/suppliers', [SupplierController::class, 'store'], [new AuthMiddleware($container)]);
 $router->put('/api/backend/v1/suppliers', [SupplierController::class, 'update'], [new AuthMiddleware($container)]);
 $router->delete('/api/backend/v1/suppliers', [SupplierController::class, 'delete'], [new AuthMiddleware($container)]);

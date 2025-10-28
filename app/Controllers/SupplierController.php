@@ -379,6 +379,52 @@ class SupplierController extends Controller
     }
 
     /**
+     * GET /api/v1/suppliers/stats-detail?id={id} - Thống kê chi tiết cho 1 supplier
+     */
+    public function getDetailStats(Request $req, Response $res)
+    {
+        try {
+            $id = (int)($req->query('id') ?? 0);
+            
+            if ($id <= 0) {
+                return $res->json(ResponseHelper::validationError(['id' => 'Invalid supplier ID']));
+            }
+            
+            // Thống kê purchase receipts
+            $sql = "SELECT 
+                        COUNT(*) as total_receipts,
+                        SUM(CASE WHEN status = 'confirmed' THEN 1 ELSE 0 END) as confirmed_receipts,
+                        SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) as pending_receipts,
+                        (SELECT COALESCE(SUM(pi.subtotal), 0) 
+                         FROM purchase_receipts pr 
+                         JOIN purchase_items pi ON pr.receipt_id = pi.receipt_id 
+                         WHERE pr.supplier_id = ? AND pr.status = 'confirmed') as total_amount,
+                        (SELECT COUNT(DISTINCT pi.variant_id)
+                         FROM purchase_receipts pr
+                         JOIN purchase_items pi ON pr.receipt_id = pi.receipt_id
+                         WHERE pr.supplier_id = ?) as total_products
+                    FROM purchase_receipts 
+                    WHERE supplier_id = ?";
+            
+            $stmt = $this->pdo->prepare($sql);
+            $stmt->execute([$id, $id, $id]);
+            $stats = $stmt->fetch(PDO::FETCH_ASSOC);
+            
+            // Convert strings to numbers
+            $stats['total_receipts'] = (int)$stats['total_receipts'];
+            $stats['confirmed_receipts'] = (int)$stats['confirmed_receipts'];
+            $stats['pending_receipts'] = (int)$stats['pending_receipts'];
+            $stats['total_amount'] = (float)$stats['total_amount'];
+            $stats['total_products'] = (int)$stats['total_products'];
+            
+            return $res->json(ResponseHelper::success($stats, 'Stats retrieved successfully'));
+            
+        } catch (Exception $e) {
+            return $res->json(ResponseHelper::serverError('Failed to fetch stats: ' . $e->getMessage()));
+        }
+    }
+
+    /**
      * Helper method: Lấy supplier by ID
      */
     private function showById(Response $res, int $id, string $message = 'Supplier retrieved successfully', int $statusCode = 200)
