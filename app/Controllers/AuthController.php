@@ -8,6 +8,7 @@ use App\Domain\Auth\{Account, User, RefreshToken};
 use App\Core\{Validator, Container};
 use App\Support\{ResponseHelper, JWT};
 use Exception;
+use PDO;
 
 class AuthController extends Controller 
 {
@@ -709,6 +710,32 @@ class AuthController extends Controller
      * Shipper Login - Mobile App Endpoint
      * Login with phone number + password for shippers only
      */
+    /**
+     * Normalize phone number to handle both +84 and 0 prefix
+     * Converts +84xxxxxxxxx to 0xxxxxxxxx and vice versa for comparison
+     */
+    private function normalizePhone(string $phone): array
+    {
+        $phone = trim($phone);
+        $variations = [$phone]; // Include original
+        
+        // If starts with +84, also try with 0
+        if (strpos($phone, '+84') === 0) {
+            $variations[] = '0' . substr($phone, 3);
+        }
+        // If starts with 0, also try with +84
+        elseif (strpos($phone, '0') === 0 && strlen($phone) > 1) {
+            $variations[] = '+84' . substr($phone, 1);
+        }
+        // If starts with 84 (without +), try both
+        elseif (strpos($phone, '84') === 0 && strlen($phone) > 2) {
+            $variations[] = '0' . substr($phone, 2);
+            $variations[] = '+84' . substr($phone, 2);
+        }
+        
+        return array_unique($variations);
+    }
+    
     public function shipperLogin(Request $req, Response $res)
     {
         $data = $req->json();
@@ -726,13 +753,17 @@ class AuthController extends Controller
         try {
             $pdo = $this->container->database()->getConnection();
             
-            // Find user by phone
+            // Normalize phone number to handle both +84 and 0 prefix
+            $phoneVariations = $this->normalizePhone($data['phone']);
+            
+            // Build query to check all phone variations
+            $placeholders = str_repeat('?,', count($phoneVariations) - 1) . '?';
             $sql = "SELECT u.*, a.account_id, a.account_name, a.password, a.is_active, a.last_login_at 
                     FROM users u 
                     JOIN accounts a ON u.account_id = a.account_id 
-                    WHERE u.phone = ?";
+                    WHERE u.phone IN ($placeholders)";
             $stmt = $pdo->prepare($sql);
-            $stmt->execute([$data['phone']]);
+            $stmt->execute($phoneVariations);
             $user = $stmt->fetch(PDO::FETCH_ASSOC);
             
             if (!$user) {
