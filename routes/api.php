@@ -1,7 +1,7 @@
 <?php
 declare(strict_types=1);
 
-use App\Controllers\{AuthController, ProductController, ProductImageController, OrderController, AdminController, CategoryController, CustomerController, ShipperController, UserController, RoleController, InventoryController, InvoiceController, VoucherController, MessageController, ShippingController, CartController, SupplierController, PurchaseReceiptController};
+use App\Controllers\{AuthController, ProductController, ProductImageController, OrderController, AdminController, CategoryController, CustomerController, ShipperController, UserController, RoleController, InventoryController, InvoiceController, VoucherController, MessageController, ShippingController, CartController, SupplierController, PurchaseReceiptController, TrackingController, NotificationController, ContentController, ContentCategoryController};
 use App\Middlewares\{AuthMiddleware, AdminMiddleware};
 
 // Debug test route
@@ -25,6 +25,12 @@ $router->get('/api/v1/auth/me', [AuthController::class, 'profile'], [new AuthMid
 $router->get('/api/v1/auth/check-admin', [AuthController::class, 'checkAdminRole'], [new AuthMiddleware($container)]);
 $router->put('/api/v1/auth/profile', [AuthController::class, 'updateProfile'], [new AuthMiddleware($container)]);
 $router->post('/api/v1/auth/change-password', [AuthController::class, 'changePassword'], [new AuthMiddleware($container)]);
+
+// ========================================
+// MOBILE APP AUTHENTICATION ROUTES (SHIPPER ONLY)
+// ========================================
+$router->post('/api/mobile/v1/auth/login', [AuthController::class, 'shipperLogin']);
+$router->post('/api/mobile/v1/auth/refresh', [AuthController::class, 'shipperRefreshToken']);
 
 // ========================================
 // ORDER MANAGEMENT ROUTES (MAIN API)
@@ -626,3 +632,54 @@ $router->post('/api/backend/v1/purchase-receipts', [PurchaseReceiptController::c
 $router->post('/api/backend/v1/purchase-receipts/confirm', [PurchaseReceiptController::class, 'confirm'], [new AuthMiddleware($container)]);
 $router->put('/api/backend/v1/purchase-receipts', [PurchaseReceiptController::class, 'update'], [new AuthMiddleware($container)]);
 $router->delete('/api/backend/v1/purchase-receipts', [PurchaseReceiptController::class, 'delete'], [new AuthMiddleware($container)]);
+
+// ========================================
+// ORDER TRACKING SYSTEM API ROUTES
+// ========================================
+// Order Tracking
+$router->get('/api/backend/v1/tracking/orders', [TrackingController::class, 'getActiveOrders'], [new AuthMiddleware($container)]);
+$router->get('/api/backend/v1/tracking/orders/{id}', [TrackingController::class, 'getOrderDetail'], [new AuthMiddleware($container)]);
+$router->post('/api/backend/v1/tracking/orders/{id}/status', [TrackingController::class, 'updateOrderStatus'], [new AuthMiddleware($container)]);
+$router->get('/api/backend/v1/tracking/shippers/{id}/location', [TrackingController::class, 'getShipperLocation'], [new AuthMiddleware($container)]);
+$router->get('/api/backend/v1/tracking/orders/{id}/history', [TrackingController::class, 'getOrderHistory'], [new AuthMiddleware($container)]);
+$router->get('/api/backend/v1/tracking/stats', [TrackingController::class, 'getDashboardStats'], [new AuthMiddleware($container)]);
+
+// Shipper Management (Enhanced for Tracking)
+$router->get('/api/backend/v1/shippers', [ShipperController::class, 'getAll'], [new AuthMiddleware($container)]);
+$router->get('/api/backend/v1/shippers/available', [ShipperController::class, 'getAvailable'], [new AuthMiddleware($container)]);
+$router->get('/api/backend/v1/shippers/{id}/performance', [ShipperController::class, 'getPerformance'], [new AuthMiddleware($container)]);
+$router->post('/api/backend/v1/shippers/{id}/location', [ShipperController::class, 'updateLocation'], [new AuthMiddleware($container)]);
+$router->post('/api/backend/v1/shippers/assign-order', [ShipperController::class, 'assignOrder'], [new AuthMiddleware($container)]);
+
+// Notifications
+$router->get('/api/backend/v1/notifications', [NotificationController::class, 'getAll'], [new AuthMiddleware($container)]);
+$router->get('/api/backend/v1/notifications/stats', [NotificationController::class, 'getStats'], [new AuthMiddleware($container)]);
+$router->put('/api/backend/v1/notifications/{id}/read', [NotificationController::class, 'markAsRead'], [new AuthMiddleware($container)]);
+$router->put('/api/backend/v1/notifications/mark-all-read', [NotificationController::class, 'markAllAsRead'], [new AuthMiddleware($container)]);
+$router->post('/api/backend/v1/notifications', [NotificationController::class, 'create'], [new AuthMiddleware($container)]);
+$router->delete('/api/backend/v1/notifications/{id}', [NotificationController::class, 'delete'], [new AuthMiddleware($container)]);
+
+// ========================================
+// CONTENT MANAGEMENT SYSTEM API ROUTES
+// ========================================
+// Content CRUD
+$router->get('/api/backend/v1/content', [ContentController::class, 'index'], [new AuthMiddleware($container)]);
+$router->get('/api/backend/v1/content/{id}', [ContentController::class, 'show'], [new AuthMiddleware($container)]);
+$router->get('/api/backend/v1/content/slug/{slug}', [ContentController::class, 'getBySlug'], [new AuthMiddleware($container)]);
+$router->post('/api/backend/v1/content', [ContentController::class, 'store'], [new AuthMiddleware($container)]);
+$router->put('/api/backend/v1/content/{id}', [ContentController::class, 'update'], [new AuthMiddleware($container)]);
+$router->delete('/api/backend/v1/content/{id}', [ContentController::class, 'destroy'], [new AuthMiddleware($container)]);
+$router->post('/api/backend/v1/content/{id}/publish', [ContentController::class, 'publish'], [new AuthMiddleware($container)]);
+$router->get('/api/backend/v1/content/stats', [ContentController::class, 'getStats'], [new AuthMiddleware($container)]);
+
+// Content Categories CRUD
+$router->get('/api/backend/v1/content/categories', [ContentCategoryController::class, 'index'], [new AuthMiddleware($container)]);
+$router->get('/api/backend/v1/content/categories/{id}', [ContentCategoryController::class, 'show'], [new AuthMiddleware($container)]);
+$router->post('/api/backend/v1/content/categories', [ContentCategoryController::class, 'store'], [new AuthMiddleware($container)]);
+$router->put('/api/backend/v1/content/categories/{id}', [ContentCategoryController::class, 'update'], [new AuthMiddleware($container)]);
+$router->delete('/api/backend/v1/content/categories/{id}', [ContentCategoryController::class, 'destroy'], [new AuthMiddleware($container)]);
+
+// ========================================
+// PRODUCT VARIANTS API ROUTES (for Purchase Receipts)
+// ========================================
+$router->get('/api/backend/v1/products/variants', [ProductController::class, 'getAllVariants'], [new AuthMiddleware($container)]);

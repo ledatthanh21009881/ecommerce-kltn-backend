@@ -1,8 +1,16 @@
 <?php
 namespace App\Core;
 class Response {
-    public function json($data, int $status=200): void {
-        http_response_code($status);
+    private int $statusCode = 200;
+    
+    public function status(int $code): self {
+        $this->statusCode = $code;
+        return $this;
+    }
+    
+    public function json($data, int $status=null): void {
+        $statusCode = $status ?? $this->statusCode;
+        http_response_code($statusCode);
         header('Content-Type: application/json');
         echo json_encode($data, JSON_UNESCAPED_UNICODE);
     }

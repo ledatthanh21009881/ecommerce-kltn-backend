@@ -76,4 +76,25 @@ class Request
     {
         $_GET[$key] = $value;
     }
+
+    /**
+     * Set param (alias for setQueryParam for backward compatibility)
+     */
+    public function setParam(string $key, mixed $value): void
+    {
+        $this->setQueryParam($key, $value);
+    }
+
+    /**
+     * Get route parameter (from attributes or query params)
+     */
+    public function param(string $key, mixed $default = null): mixed
+    {
+        // First check attributes (for route parameters)
+        if ($this->hasAttribute($key)) {
+            return $this->getAttribute($key);
+        }
+        // Then check query params
+        return $this->query($key, $default);
+    }
 }

@@ -7,8 +7,9 @@ class ResponseHelper
 {
     public static function success(mixed $data = null, string $message = 'Success', int $statusCode = 200): array
     {
-        http_response_code($statusCode);
-        header('Content-Type: application/json');
+        // Don't set headers here - let Response class handle it
+        // http_response_code($statusCode);
+        // header('Content-Type: application/json');
         
         $response = [
             'success' => true,
@@ -25,8 +26,9 @@ class ResponseHelper
     
     public static function error(string $message = 'Error', int $statusCode = 400, mixed $errors = null): array
     {
-        http_response_code($statusCode);
-        header('Content-Type: application/json');
+        // Don't set headers here - let Response class handle it
+        // http_response_code($statusCode);
+        // header('Content-Type: application/json');
         
         $response = [
             'success' => false,

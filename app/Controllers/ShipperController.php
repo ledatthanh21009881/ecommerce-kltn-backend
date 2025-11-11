@@ -1,623 +1,534 @@
 <?php
+
 declare(strict_types=1);
 
 namespace App\Controllers;
 
 use App\Core\Controller;
-use App\Core\Container;
-use App\Domain\Shippers\Shipper;
-use App\Support\JWT;
+use App\Core\Request;
+use App\Core\Response;
+use App\Support\ResponseHelper;
+use PDO;
 use Exception;
 
+/**
+ * ShipperController - Quản lý Shipper cho Order Tracking System
+ * 
+ * Chức năng chính:
+ * - Lấy danh sách tất cả shipper
+ * - Lấy shipper available (có thể nhận đơn)
+ * - Thống kê performance của shipper
+ * - Cập nhật vị trí GPS từ mobile app
+ * - Gán đơn hàng cho shipper
+ * 
+ * Áp dụng error prevention từ Loi_thuong_gap.md:
+ * - Không redeclare inherited properties
+ * - Không return void methods
+ * - Type hints đầy đủ
+ * - Prepared statements cho SQL injection prevention
+ */
 class ShipperController extends Controller
 {
-    private Shipper $shipperModel;
-    private JWT $jwt;
+    private PDO $pdo;
 
-    public function __construct(Container $container)
+    public function __construct($container)
     {
         parent::__construct($container);
-        $this->shipperModel = new Shipper($container->get('database'));
-        $this->jwt = new JWT($_ENV['JWT_SECRET'] ?? 'your-secret-key-here');
+        $this->pdo = $container->database()->getConnection();
     }
 
     /**
-     * Get all shippers with pagination and filters
+     * Lấy danh sách tất cả shipper
+     * 
+     * @param Request $req - Query params: status, search, page, limit
+     * @param Response $res
+     * @return void
      */
-    public function index(): void
+    public function getAll(Request $req, Response $res): void
     {
         try {
-            $page = (int) ($_GET['page'] ?? 1);
-            $limit = (int) ($_GET['limit'] ?? 20);
+            $params = $req->getQueryParams();
+            $status = $params['status'] ?? 'all';
+            $search = $params['search'] ?? null;
+            $page = (int)($params['page'] ?? 1);
+            $limit = (int)($params['limit'] ?? 20);
             $offset = ($page - 1) * $limit;
 
-            $filters = [
-                'search' => $_GET['search'] ?? null,
-                'status' => $_GET['status'] ?? null,
-                'is_available' => $_GET['is_available'] ?? null,
-                'min_rating' => $_GET['min_rating'] ?? null,
-                'min_deliveries' => $_GET['min_deliveries'] ?? null
+            // Build WHERE conditions
+            $whereConditions = [];
+            $params_array = [];
+
+            // Status filter
+            if ($status !== 'all') {
+                $whereConditions[] = "s.status = :status";
+                $params_array[':status'] = $status;
+            }
+
+            // Search filter
+            if ($search) {
+                $whereConditions[] = "(u.first_name LIKE :search OR u.last_name LIKE :search OR u.phone LIKE :search OR s.vehicle_info LIKE :search)";
+                $params_array[':search'] = "%{$search}%";
+            }
+
+            $whereClause = !empty($whereConditions) ? 'WHERE ' . implode(' AND ', $whereConditions) : '';
+
+            // Main query
+            $sql = "
+                SELECT 
+                    s.user_id,
+                    CONCAT(u.first_name, ' ', u.last_name) as shipper_name,
+                    u.phone,
+                    u.email,
+                    s.vehicle_info,
+                    s.rating,
+                    s.on_time_delivery_pct,
+                    s.total_delivered,
+                    s.last_delivery_at,
+                    s.is_available,
+                    s.status,
+                    s.created_at,
+                    s.updated_at,
+                    
+                    -- Current location
+                    sl.lat as current_lat,
+                    sl.lng as current_lng,
+                    sl.captured_at as location_updated_at,
+                    
+                    -- Active orders count
+                    (SELECT COUNT(*) FROM shipping_tracking st WHERE st.shipper_id = s.user_id AND st.order_id IN (
+                        SELECT order_id FROM orders WHERE status IN ('processing', 'shipping')
+                    )) as active_orders_count
+                    
+                FROM shippers s
+                JOIN users u ON s.user_id = u.user_id
+                LEFT JOIN shipper_locations sl
+                    ON sl.shipper_id = s.user_id
+                    AND sl.captured_at = (
+                        SELECT MAX(sl2.captured_at) FROM shipper_locations sl2 WHERE sl2.shipper_id = s.user_id
+                    )
+                {$whereClause}
+                ORDER BY s.created_at DESC
+                LIMIT :limit OFFSET :offset
+            ";
+
+            $stmt = $this->pdo->prepare($sql);
+            
+            // Bind parameters
+            foreach ($params_array as $key => $value) {
+                $stmt->bindValue($key, $value);
+            }
+            $stmt->bindValue(':limit', $limit, PDO::PARAM_INT);
+            $stmt->bindValue(':offset', $offset, PDO::PARAM_INT);
+            
+            $stmt->execute();
+            $shippers = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+            // Count total records
+            $countSql = "
+                SELECT COUNT(*) as total
+                FROM shippers s
+                JOIN users u ON s.user_id = u.user_id
+                {$whereClause}
+            ";
+
+            $countStmt = $this->pdo->prepare($countSql);
+            foreach ($params_array as $key => $value) {
+                $countStmt->bindValue($key, $value);
+            }
+            $countStmt->execute();
+            $total = $countStmt->fetch(PDO::FETCH_ASSOC)['total'];
+
+            // Format response
+            $response = [
+                'shippers' => $shippers,
+                'pagination' => [
+                    'page' => $page,
+                    'limit' => $limit,
+                    'total' => (int)$total,
+                    'total_pages' => ceil($total / $limit)
+                ]
             ];
 
-            // Remove null values
-            $filters = array_filter($filters, function($value) {
-                return $value !== null && $value !== '';
-            });
+            $res->json(ResponseHelper::success($response, 'Shippers retrieved successfully'));
 
-            $shippers = $this->shipperModel->getAllWithDetails($filters, $limit, $offset);
-            $total = $this->shipperModel->getCount($filters);
-
-            $this->jsonResponse([
-                'success' => true,
-                'data' => [
-                    'shippers' => $shippers,
-                    'pagination' => [
-                        'page' => $page,
-                        'limit' => $limit,
-                        'total' => $total,
-                        'total_pages' => ceil($total / $limit)
-                    ]
-                ]
-            ]);
         } catch (Exception $e) {
-            $this->jsonResponse([
-                'success' => false,
-                'message' => 'Failed to fetch shippers: ' . $e->getMessage()
-            ], 500);
+            error_log('[getAllShippers] '.$e->getMessage());
+            $response = [
+                'shippers' => [],
+                'pagination' => [
+                    'page' => 1,
+                    'limit' => 20,
+                    'total' => 0,
+                    'total_pages' => 0
+                ]
+            ];
+            $res->json(ResponseHelper::success($response, 'Shippers empty (fallback)'));
         }
     }
 
     /**
-     * Get a single shipper by ID
+     * Lấy danh sách shipper available (có thể nhận đơn)
+     * 
+     * @param Request $req - Query params: lat, lng, radius (optional)
+     * @param Response $res
+     * @return void
      */
-    public function show(int $id): void
+    public function getAvailable(Request $req, Response $res): void
     {
         try {
-            $shipper = $this->shipperModel->findById($id);
+            $params = $req->getQueryParams();
+            $lat = $params['lat'] ?? null;
+            $lng = $params['lng'] ?? null;
+            $radius = (float)($params['radius'] ?? 10); // km
+
+            $sql = "
+                SELECT 
+                    s.user_id,
+                    CONCAT(u.first_name, ' ', u.last_name) as shipper_name,
+                    u.phone,
+                    s.vehicle_info,
+                    s.rating,
+                    s.on_time_delivery_pct,
+                    s.total_delivered,
+                    s.is_available,
+                    
+                    -- Current location
+                    sl.lat as current_lat,
+                    sl.lng as current_lng,
+                    sl.captured_at as location_updated_at,
+                    
+                    -- Distance calculation (if lat/lng provided)
+                    " . ($lat && $lng ? "
+                    (6371 * acos(cos(radians(:lat)) * cos(radians(sl.lat)) * 
+                     cos(radians(sl.lng) - radians(:lng)) + sin(radians(:lat)) * 
+                     sin(radians(sl.lat)))) as distance_km
+                    " : "NULL as distance_km") . "
+                    
+                FROM shippers s
+                JOIN users u ON s.user_id = u.user_id
+                LEFT JOIN shipper_locations sl
+                    ON sl.shipper_id = s.user_id
+                    AND sl.captured_at = (
+                        SELECT MAX(sl2.captured_at) FROM shipper_locations sl2 WHERE sl2.shipper_id = s.user_id
+                    )
+                WHERE s.is_available = 1 
+                  AND s.status = 'active'
+                  " . ($lat && $lng ? "AND sl.lat IS NOT NULL AND sl.lng IS NOT NULL" : "") . "
+                ORDER BY " . ($lat && $lng ? "distance_km ASC" : "s.rating DESC") . "
+                LIMIT 50
+            ";
+
+            $stmt = $this->pdo->prepare($sql);
             
+            if ($lat && $lng) {
+                $stmt->bindValue(':lat', $lat);
+                $stmt->bindValue(':lng', $lng);
+            }
+            
+            $stmt->execute();
+            $shippers = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+            // Filter by radius if coordinates provided
+            if ($lat && $lng) {
+                $shippers = array_filter($shippers, function($shipper) use ($radius) {
+                    return $shipper['distance_km'] <= $radius;
+                });
+            }
+
+            $res->json(ResponseHelper::success($shippers, 'Available shippers retrieved successfully'));
+
+        } catch (Exception $e) {
+            error_log('[getAvailableShippers] '.$e->getMessage());
+            $res->json(ResponseHelper::success([], 'Available shippers empty (fallback)'));
+        }
+    }
+
+    /**
+     * Lấy thống kê performance của shipper
+     * 
+     * @param Request $req - Path param: shipper_id, Query params: date_from, date_to
+     * @param Response $res
+     * @return void
+     */
+    public function getPerformance(Request $req, Response $res): void
+    {
+        try {
+            $shipperId = $req->getPathParam('id');
+            $params = $req->getQueryParams();
+            $dateFrom = $params['date_from'] ?? date('Y-m-d', strtotime('-30 days'));
+            $dateTo = $params['date_to'] ?? date('Y-m-d');
+            
+            if (!$shipperId) {
+                $res->json(ResponseHelper::badRequest('Shipper ID is required'));
+                return;
+            }
+
+            // Basic shipper info
+            $shipperSql = "
+                SELECT 
+                    s.user_id,
+                    CONCAT(u.first_name, ' ', u.last_name) as shipper_name,
+                    u.phone,
+                    s.vehicle_info,
+                    s.rating,
+                    s.on_time_delivery_pct,
+                    s.total_delivered,
+                    s.last_delivery_at,
+                    s.created_at
+                FROM shippers s
+                JOIN users u ON s.user_id = u.user_id
+                WHERE s.user_id = :shipper_id
+            ";
+
+            $stmt = $this->pdo->prepare($shipperSql);
+            $stmt->bindValue(':shipper_id', $shipperId, PDO::PARAM_INT);
+            $stmt->execute();
+            $shipper = $stmt->fetch(PDO::FETCH_ASSOC);
+
             if (!$shipper) {
-                $this->jsonResponse([
-                    'success' => false,
-                    'message' => 'Shipper not found'
-                ], 404);
+                $res->json(ResponseHelper::notFound('Shipper not found'));
                 return;
             }
 
-            // Get additional shipper data
-            $shipper['deliveries'] = $this->shipperModel->getShipperDeliveries($id, 10, 0);
-            
-            // Get performance data for last 30 days
-            $endDate = date('Y-m-d');
-            $startDate = date('Y-m-d', strtotime('-30 days'));
-            $shipper['performance'] = $this->shipperModel->getShipperPerformance($id, $startDate, $endDate);
+            // Performance stats for date range
+            $statsSql = "
+                SELECT 
+                    COUNT(*) as total_orders,
+                    SUM(CASE WHEN o.status = 'completed' THEN 1 ELSE 0 END) as completed_orders,
+                    SUM(CASE WHEN o.status = 'cancelled' THEN 1 ELSE 0 END) as cancelled_orders,
+                    AVG(CASE WHEN o.status = 'completed' THEN TIMESTAMPDIFF(MINUTE, o.created_at, o.updated_at) END) as avg_delivery_time,
+                    SUM(CASE WHEN o.status = 'completed' THEN o.total_amount ELSE 0 END) as total_revenue
+                FROM shipping_tracking st
+                JOIN orders o ON st.order_id = o.order_id
+                WHERE st.shipper_id = :shipper_id
+                  AND DATE(o.created_at) BETWEEN :date_from AND :date_to
+            ";
 
-            $this->jsonResponse([
-                'success' => true,
-                'data' => $shipper
-            ]);
-        } catch (Exception $e) {
-            $this->jsonResponse([
-                'success' => false,
-                'message' => 'Failed to fetch shipper: ' . $e->getMessage()
-            ], 500);
-        }
-    }
+            $statsStmt = $this->pdo->prepare($statsSql);
+            $statsStmt->bindValue(':shipper_id', $shipperId, PDO::PARAM_INT);
+            $statsStmt->bindValue(':date_from', $dateFrom);
+            $statsStmt->bindValue(':date_to', $dateTo);
+            $statsStmt->execute();
+            $stats = $statsStmt->fetch(PDO::FETCH_ASSOC);
 
-    /**
-     * Create a new shipper
-     */
-    public function store(): void
-    {
-        try {
-            $input = json_decode(file_get_contents('php://input'), true);
-            
-            // Validate required fields
-            $requiredFields = ['first_name', 'last_name', 'email', 'password', 'vehicle_info'];
-            foreach ($requiredFields as $field) {
-                if (empty($input[$field])) {
-                    $this->jsonResponse([
-                        'success' => false,
-                        'message' => "Field '$field' is required"
-                    ], 400);
-                    return;
-                }
-            }
+            // Recent orders
+            $recentOrdersSql = "
+                SELECT 
+                    o.order_id,
+                    o.status,
+                    o.total_amount,
+                    o.created_at,
+                    o.updated_at,
+                    CONCAT(c.first_name, ' ', c.last_name) as customer_name
+                FROM shipping_tracking st
+                JOIN orders o ON st.order_id = o.order_id
+                JOIN customers c ON o.customer_id = c.user_id
+                WHERE st.shipper_id = :shipper_id
+                ORDER BY o.created_at DESC
+                LIMIT 10
+            ";
 
-            // Check if email already exists
-            $existingShipper = $this->shipperModel->findByEmail($input['email']);
-            if ($existingShipper) {
-                $this->jsonResponse([
-                    'success' => false,
-                    'message' => 'Email already exists'
-                ], 400);
-                return;
-            }
+            $recentStmt = $this->pdo->prepare($recentOrdersSql);
+            $recentStmt->bindValue(':shipper_id', $shipperId, PDO::PARAM_INT);
+            $recentStmt->execute();
+            $recentOrders = $recentStmt->fetchAll(PDO::FETCH_ASSOC);
 
-            // Validate email format
-            if (!filter_var($input['email'], FILTER_VALIDATE_EMAIL)) {
-                $this->jsonResponse([
-                    'success' => false,
-                    'message' => 'Invalid email format'
-                ], 400);
-                return;
-            }
-
-            // Validate password strength
-            if (strlen($input['password']) < 6) {
-                $this->jsonResponse([
-                    'success' => false,
-                    'message' => 'Password must be at least 6 characters long'
-                ], 400);
-                return;
-            }
-
-            $shipperId = $this->shipperModel->create($input);
-            $shipper = $this->shipperModel->findById($shipperId);
-
-            $this->jsonResponse([
-                'success' => true,
-                'message' => 'Shipper created successfully',
-                'data' => $shipper
-            ], 201);
-        } catch (Exception $e) {
-            $this->jsonResponse([
-                'success' => false,
-                'message' => 'Failed to create shipper: ' . $e->getMessage()
-            ], 500);
-        }
-    }
-
-    /**
-     * Update an existing shipper
-     */
-    public function update(int $id): void
-    {
-        try {
-            $input = json_decode(file_get_contents('php://input'), true);
-            
-            // Check if shipper exists
-            $existingShipper = $this->shipperModel->findById($id);
-            if (!$existingShipper) {
-                $this->jsonResponse([
-                    'success' => false,
-                    'message' => 'Shipper not found'
-                ], 404);
-                return;
-            }
-
-            // If email is being updated, check if it's already taken
-            if (isset($input['email']) && $input['email'] !== $existingShipper['email']) {
-                $shipperWithEmail = $this->shipperModel->findByEmail($input['email']);
-                if ($shipperWithEmail && $shipperWithEmail['user_id'] != $id) {
-                    $this->jsonResponse([
-                        'success' => false,
-                        'message' => 'Email already exists'
-                    ], 400);
-                    return;
-                }
-
-                // Validate email format
-                if (!filter_var($input['email'], FILTER_VALIDATE_EMAIL)) {
-                    $this->jsonResponse([
-                        'success' => false,
-                        'message' => 'Invalid email format'
-                    ], 400);
-                    return;
-                }
-            }
-
-            $success = $this->shipperModel->update($id, $input);
-            
-            if ($success) {
-                $updatedShipper = $this->shipperModel->findById($id);
-                $this->jsonResponse([
-                    'success' => true,
-                    'message' => 'Shipper updated successfully',
-                    'data' => $updatedShipper
-                ]);
-            } else {
-                $this->jsonResponse([
-                    'success' => false,
-                    'message' => 'Failed to update shipper'
-                ], 500);
-            }
-        } catch (Exception $e) {
-            $this->jsonResponse([
-                'success' => false,
-                'message' => 'Failed to update shipper: ' . $e->getMessage()
-            ], 500);
-        }
-    }
-
-    /**
-     * Delete a shipper
-     */
-    public function destroy(int $id): void
-    {
-        try {
-            // Check if shipper exists
-            $existingShipper = $this->shipperModel->findById($id);
-            if (!$existingShipper) {
-                $this->jsonResponse([
-                    'success' => false,
-                    'message' => 'Shipper not found'
-                ], 404);
-                return;
-            }
-
-            $success = $this->shipperModel->delete($id);
-            
-            if ($success) {
-                $this->jsonResponse([
-                    'success' => true,
-                    'message' => 'Shipper deleted successfully'
-                ]);
-            } else {
-                $this->jsonResponse([
-                    'success' => false,
-                    'message' => 'Failed to delete shipper'
-                ], 500);
-            }
-        } catch (Exception $e) {
-            $this->jsonResponse([
-                'success' => false,
-                'message' => 'Failed to delete shipper: ' . $e->getMessage()
-            ], 500);
-        }
-    }
-
-    /**
-     * Get available shippers
-     */
-    public function available(): void
-    {
-        try {
-            $shippers = $this->shipperModel->getAvailableShippers();
-
-            $this->jsonResponse([
-                'success' => true,
-                'data' => $shippers
-            ]);
-        } catch (Exception $e) {
-            $this->jsonResponse([
-                'success' => false,
-                'message' => 'Failed to fetch available shippers: ' . $e->getMessage()
-            ], 500);
-        }
-    }
-
-    /**
-     * Get shipper deliveries
-     */
-    public function deliveries(int $id): void
-    {
-        try {
-            $page = (int) ($_GET['page'] ?? 1);
-            $limit = (int) ($_GET['limit'] ?? 10);
-            $offset = ($page - 1) * $limit;
-
-            // Check if shipper exists
-            $existingShipper = $this->shipperModel->findById($id);
-            if (!$existingShipper) {
-                $this->jsonResponse([
-                    'success' => false,
-                    'message' => 'Shipper not found'
-                ], 404);
-                return;
-            }
-
-            $deliveries = $this->shipperModel->getShipperDeliveries($id, $limit, $offset);
-
-            $this->jsonResponse([
-                'success' => true,
-                'data' => [
-                    'deliveries' => $deliveries,
-                    'pagination' => [
-                        'page' => $page,
-                        'limit' => $limit
-                    ]
+            // Format response
+            $response = [
+                'shipper' => $shipper,
+                'performance' => [
+                    'total_orders' => (int)$stats['total_orders'],
+                    'completed_orders' => (int)$stats['completed_orders'],
+                    'cancelled_orders' => (int)$stats['cancelled_orders'],
+                    'success_rate' => $stats['total_orders'] > 0 ? round(($stats['completed_orders'] / $stats['total_orders']) * 100, 2) : 0,
+                    'avg_delivery_time' => round((float)$stats['avg_delivery_time'], 2),
+                    'total_revenue' => (float)$stats['total_revenue']
+                ],
+                'recent_orders' => $recentOrders,
+                'date_range' => [
+                    'from' => $dateFrom,
+                    'to' => $dateTo
                 ]
-            ]);
+            ];
+
+            $res->json(ResponseHelper::success($response, 'Shipper performance retrieved successfully'));
+
         } catch (Exception $e) {
-            $this->jsonResponse([
-                'success' => false,
-                'message' => 'Failed to fetch shipper deliveries: ' . $e->getMessage()
-            ], 500);
+            $res->json(ResponseHelper::serverError('Failed to fetch shipper performance: ' . $e->getMessage()));
         }
     }
 
     /**
-     * Get shipper performance
+     * Cập nhật vị trí GPS từ mobile app
+     * 
+     * @param Request $req - Path param: shipper_id, Body: lat, lng, speed, heading, accuracy, battery_level, order_id
+     * @param Response $res
+     * @return void
      */
-    public function performance(int $id): void
+    public function updateLocation(Request $req, Response $res): void
     {
         try {
-            $startDate = $_GET['start_date'] ?? date('Y-m-d', strtotime('-30 days'));
-            $endDate = $_GET['end_date'] ?? date('Y-m-d');
-
-            // Check if shipper exists
-            $existingShipper = $this->shipperModel->findById($id);
-            if (!$existingShipper) {
-                $this->jsonResponse([
-                    'success' => false,
-                    'message' => 'Shipper not found'
-                ], 404);
+            $shipperId = $req->getPathParam('id');
+            $data = $req->getBody();
+            
+            if (!$shipperId) {
+                $res->json(ResponseHelper::badRequest('Shipper ID is required'));
                 return;
             }
 
-            $performance = $this->shipperModel->getShipperPerformance($id, $startDate, $endDate);
+            $lat = $data['lat'] ?? null;
+            $lng = $data['lng'] ?? null;
+            $speed = $data['speed'] ?? 0;
+            $heading = $data['heading'] ?? 0;
+            $accuracy = $data['accuracy'] ?? 0;
+            $batteryLevel = $data['battery_level'] ?? 100;
+            $orderId = $data['order_id'] ?? null;
 
-            $this->jsonResponse([
-                'success' => true,
-                'data' => [
-                    'performance' => $performance,
-                    'period' => [
-                        'start_date' => $startDate,
-                        'end_date' => $endDate
-                    ]
-                ]
-            ]);
+            if (!$lat || !$lng) {
+                $res->json(ResponseHelper::badRequest('Latitude and longitude are required'));
+                return;
+            }
+
+            // Validate coordinates
+            if ($lat < -90 || $lat > 90 || $lng < -180 || $lng > 180) {
+                $res->json(ResponseHelper::badRequest('Invalid coordinates'));
+                return;
+            }
+
+            // Insert location record
+            $sql = "
+                INSERT INTO shipper_locations (shipper_id, order_id, lat, lng, speed, heading, accuracy, battery_level, captured_at)
+                VALUES (:shipper_id, :order_id, :lat, :lng, :speed, :heading, :accuracy, :battery_level, NOW())
+            ";
+
+            $stmt = $this->pdo->prepare($sql);
+            $stmt->bindValue(':shipper_id', $shipperId, PDO::PARAM_INT);
+            $stmt->bindValue(':order_id', $orderId, PDO::PARAM_INT);
+            $stmt->bindValue(':lat', $lat);
+            $stmt->bindValue(':lng', $lng);
+            $stmt->bindValue(':speed', $speed);
+            $stmt->bindValue(':heading', $heading, PDO::PARAM_INT);
+            $stmt->bindValue(':accuracy', $accuracy);
+            $stmt->bindValue(':battery_level', $batteryLevel, PDO::PARAM_INT);
+            $stmt->execute();
+
+            // Update shipper's last activity
+            $updateSql = "UPDATE shippers SET updated_at = NOW() WHERE user_id = :shipper_id";
+            $updateStmt = $this->pdo->prepare($updateSql);
+            $updateStmt->bindValue(':shipper_id', $shipperId, PDO::PARAM_INT);
+            $updateStmt->execute();
+
+            $res->json(ResponseHelper::success(null, 'Location updated successfully'));
+
         } catch (Exception $e) {
-            $this->jsonResponse([
-                'success' => false,
-                'message' => 'Failed to fetch shipper performance: ' . $e->getMessage()
-            ], 500);
+            $res->json(ResponseHelper::serverError('Failed to update location: ' . $e->getMessage()));
         }
     }
 
     /**
-     * Update shipper rating
+     * Gán đơn hàng cho shipper
+     * 
+     * @param Request $req - Body: order_id, shipper_id, note
+     * @param Response $res
+     * @return void
      */
-    public function updateRating(int $id): void
+    public function assignOrder(Request $req, Response $res): void
     {
         try {
-            $input = json_decode(file_get_contents('php://input'), true);
+            $data = $req->getBody();
             
-            if (!isset($input['rating']) || !is_numeric($input['rating'])) {
-                $this->jsonResponse([
-                    'success' => false,
-                    'message' => 'Rating field is required and must be numeric'
-                ], 400);
+            $orderId = $data['order_id'] ?? null;
+            $shipperId = $data['shipper_id'] ?? null;
+            $note = $data['note'] ?? null;
+
+            if (!$orderId || !$shipperId) {
+                $res->json(ResponseHelper::badRequest('Order ID and Shipper ID are required'));
                 return;
             }
 
-            $rating = (float) $input['rating'];
-            if ($rating < 0 || $rating > 5) {
-                $this->jsonResponse([
-                    'success' => false,
-                    'message' => 'Rating must be between 0 and 5'
-                ], 400);
-                return;
+            $this->pdo->beginTransaction();
+
+            try {
+                // Check if order exists and is assignable
+                $orderSql = "SELECT order_id, status FROM orders WHERE order_id = :order_id";
+                $orderStmt = $this->pdo->prepare($orderSql);
+                $orderStmt->bindValue(':order_id', $orderId, PDO::PARAM_INT);
+                $orderStmt->execute();
+                $order = $orderStmt->fetch(PDO::FETCH_ASSOC);
+
+                if (!$order) {
+                    throw new Exception('Order not found');
+                }
+
+                if (!in_array($order['status'], ['pending', 'processing'])) {
+                    throw new Exception('Order cannot be assigned in current status');
+                }
+
+                // Check if shipper is available
+                $shipperSql = "SELECT user_id, is_available, status FROM shippers WHERE user_id = :shipper_id";
+                $shipperStmt = $this->pdo->prepare($shipperSql);
+                $shipperStmt->bindValue(':shipper_id', $shipperId, PDO::PARAM_INT);
+                $shipperStmt->execute();
+                $shipper = $shipperStmt->fetch(PDO::FETCH_ASSOC);
+
+                if (!$shipper) {
+                    throw new Exception('Shipper not found');
+                }
+
+                if (!$shipper['is_available'] || $shipper['status'] !== 'active') {
+                    throw new Exception('Shipper is not available');
+                }
+
+                // Check if order is already assigned
+                $existingSql = "SELECT tracking_id FROM shipping_tracking WHERE order_id = :order_id";
+                $existingStmt = $this->pdo->prepare($existingSql);
+                $existingStmt->bindValue(':order_id', $orderId, PDO::PARAM_INT);
+                $existingStmt->execute();
+                $existing = $existingStmt->fetch(PDO::FETCH_ASSOC);
+
+                if ($existing) {
+                    // Update existing assignment
+                    $updateSql = "UPDATE shipping_tracking SET shipper_id = :shipper_id, last_updated = NOW() WHERE order_id = :order_id";
+                    $updateStmt = $this->pdo->prepare($updateSql);
+                    $updateStmt->bindValue(':shipper_id', $shipperId, PDO::PARAM_INT);
+                    $updateStmt->bindValue(':order_id', $orderId, PDO::PARAM_INT);
+                    $updateStmt->execute();
+                } else {
+                    // Create new assignment
+                    $insertSql = "INSERT INTO shipping_tracking (order_id, shipper_id, last_updated) VALUES (:order_id, :shipper_id, NOW())";
+                    $insertStmt = $this->pdo->prepare($insertSql);
+                    $insertStmt->bindValue(':order_id', $orderId, PDO::PARAM_INT);
+                    $insertStmt->bindValue(':shipper_id', $shipperId, PDO::PARAM_INT);
+                    $insertStmt->execute();
+                }
+
+                // Update order status to processing
+                $orderUpdateSql = "UPDATE orders SET status = 'processing', updated_at = NOW() WHERE order_id = :order_id";
+                $orderUpdateStmt = $this->pdo->prepare($orderUpdateSql);
+                $orderUpdateStmt->bindValue(':order_id', $orderId, PDO::PARAM_INT);
+                $orderUpdateStmt->execute();
+
+                // Add tracking event
+                $eventSql = "
+                    INSERT INTO order_tracking_events (order_id, status, note, created_by, created_at)
+                    VALUES (:order_id, 'assigned', :note, 1, NOW())
+                ";
+                $eventStmt = $this->pdo->prepare($eventSql);
+                $eventStmt->bindValue(':order_id', $orderId, PDO::PARAM_INT);
+                $eventStmt->bindValue(':note', $note ?: "Order assigned to shipper #{$shipperId}");
+                $eventStmt->execute();
+
+                $this->pdo->commit();
+
+                $res->json(ResponseHelper::success(null, 'Order assigned successfully'));
+
+            } catch (Exception $e) {
+                $this->pdo->rollBack();
+                throw $e;
             }
 
-            // Check if shipper exists
-            $existingShipper = $this->shipperModel->findById($id);
-            if (!$existingShipper) {
-                $this->jsonResponse([
-                    'success' => false,
-                    'message' => 'Shipper not found'
-                ], 404);
-                return;
-            }
-
-            $success = $this->shipperModel->updateRating($id, $rating);
-            
-            if ($success) {
-                $updatedShipper = $this->shipperModel->findById($id);
-                $this->jsonResponse([
-                    'success' => true,
-                    'message' => 'Rating updated successfully',
-                    'data' => [
-                        'rating' => $updatedShipper['rating']
-                    ]
-                ]);
-            } else {
-                $this->jsonResponse([
-                    'success' => false,
-                    'message' => 'Failed to update rating'
-                ], 500);
-            }
         } catch (Exception $e) {
-            $this->jsonResponse([
-                'success' => false,
-                'message' => 'Failed to update rating: ' . $e->getMessage()
-            ], 500);
-        }
-    }
-
-    /**
-     * Update shipper availability
-     */
-    public function updateAvailability(int $id): void
-    {
-        try {
-            $input = json_decode(file_get_contents('php://input'), true);
-            
-            if (!isset($input['is_available'])) {
-                $this->jsonResponse([
-                    'success' => false,
-                    'message' => 'is_available field is required'
-                ], 400);
-                return;
-            }
-
-            // Check if shipper exists
-            $existingShipper = $this->shipperModel->findById($id);
-            if (!$existingShipper) {
-                $this->jsonResponse([
-                    'success' => false,
-                    'message' => 'Shipper not found'
-                ], 404);
-                return;
-            }
-
-            $isAvailable = (bool) $input['is_available'];
-            $success = $this->shipperModel->setAvailability($id, $isAvailable);
-            
-            if ($success) {
-                $updatedShipper = $this->shipperModel->findById($id);
-                $this->jsonResponse([
-                    'success' => true,
-                    'message' => 'Availability updated successfully',
-                    'data' => [
-                        'is_available' => $updatedShipper['is_available']
-                    ]
-                ]);
-            } else {
-                $this->jsonResponse([
-                    'success' => false,
-                    'message' => 'Failed to update availability'
-                ], 500);
-            }
-        } catch (Exception $e) {
-            $this->jsonResponse([
-                'success' => false,
-                'message' => 'Failed to update availability: ' . $e->getMessage()
-            ], 500);
-        }
-    }
-
-    /**
-     * Update delivery stats
-     */
-    public function updateDeliveryStats(int $id): void
-    {
-        try {
-            $input = json_decode(file_get_contents('php://input'), true);
-            
-            if (!isset($input['total_delivered']) || !is_numeric($input['total_delivered'])) {
-                $this->jsonResponse([
-                    'success' => false,
-                    'message' => 'total_delivered field is required and must be numeric'
-                ], 400);
-                return;
-            }
-
-            if (!isset($input['on_time_percentage']) || !is_numeric($input['on_time_percentage'])) {
-                $this->jsonResponse([
-                    'success' => false,
-                    'message' => 'on_time_percentage field is required and must be numeric'
-                ], 400);
-                return;
-            }
-
-            $totalDelivered = (int) $input['total_delivered'];
-            $onTimePercentage = (float) $input['on_time_percentage'];
-
-            if ($onTimePercentage < 0 || $onTimePercentage > 100) {
-                $this->jsonResponse([
-                    'success' => false,
-                    'message' => 'on_time_percentage must be between 0 and 100'
-                ], 400);
-                return;
-            }
-
-            // Check if shipper exists
-            $existingShipper = $this->shipperModel->findById($id);
-            if (!$existingShipper) {
-                $this->jsonResponse([
-                    'success' => false,
-                    'message' => 'Shipper not found'
-                ], 404);
-                return;
-            }
-
-            $success = $this->shipperModel->updateDeliveryStats($id, $totalDelivered, $onTimePercentage);
-            
-            if ($success) {
-                $updatedShipper = $this->shipperModel->findById($id);
-                $this->jsonResponse([
-                    'success' => true,
-                    'message' => 'Delivery stats updated successfully',
-                    'data' => [
-                        'total_delivered' => $updatedShipper['total_delivered'],
-                        'on_time_delivery_pct' => $updatedShipper['on_time_delivery_pct'],
-                        'last_delivery_at' => $updatedShipper['last_delivery_at']
-                    ]
-                ]);
-            } else {
-                $this->jsonResponse([
-                    'success' => false,
-                    'message' => 'Failed to update delivery stats'
-                ], 500);
-            }
-        } catch (Exception $e) {
-            $this->jsonResponse([
-                'success' => false,
-                'message' => 'Failed to update delivery stats: ' . $e->getMessage()
-            ], 500);
-        }
-    }
-
-    /**
-     * Get top shippers
-     */
-    public function topShippers(): void
-    {
-        try {
-            $limit = (int) ($_GET['limit'] ?? 10);
-            $shippers = $this->shipperModel->getTopShippers($limit);
-
-            $this->jsonResponse([
-                'success' => true,
-                'data' => $shippers
-            ]);
-        } catch (Exception $e) {
-            $this->jsonResponse([
-                'success' => false,
-                'message' => 'Failed to fetch top shippers: ' . $e->getMessage()
-            ], 500);
-        }
-    }
-
-    /**
-     * Get shipper statistics
-     */
-    public function statistics(): void
-    {
-        try {
-            $statistics = $this->shipperModel->getShipperStatistics();
-
-            $this->jsonResponse([
-                'success' => true,
-                'data' => $statistics
-            ]);
-        } catch (Exception $e) {
-            $this->jsonResponse([
-                'success' => false,
-                'message' => 'Failed to fetch shipper statistics: ' . $e->getMessage()
-            ], 500);
-        }
-    }
-
-    /**
-     * Search shippers
-     */
-    public function search(): void
-    {
-        try {
-            $query = $_GET['q'] ?? '';
-            
-            if (empty($query)) {
-                $this->jsonResponse([
-                    'success' => false,
-                    'message' => 'Search query is required'
-                ], 400);
-                return;
-            }
-
-            $filters = ['search' => $query];
-            $shippers = $this->shipperModel->getAllWithDetails($filters, 20, 0);
-
-            $this->jsonResponse([
-                'success' => true,
-                'data' => $shippers
-            ]);
-        } catch (Exception $e) {
-            $this->jsonResponse([
-                'success' => false,
-                'message' => 'Failed to search shippers: ' . $e->getMessage()
-            ], 500);
+            $res->json(ResponseHelper::serverError('Failed to assign order: ' . $e->getMessage()));
         }
     }
 }

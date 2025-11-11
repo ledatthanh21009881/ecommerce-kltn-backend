@@ -704,4 +704,205 @@ class AuthController extends Controller
             return $res->json(ResponseHelper::serverError('Logout failed: ' . $e->getMessage()));
         }
     }
+    
+    /**
+     * Shipper Login - Mobile App Endpoint
+     * Login with phone number + password for shippers only
+     */
+    public function shipperLogin(Request $req, Response $res)
+    {
+        $data = $req->json();
+        
+        // Validate input
+        $validator = Validator::make($data, [
+            'phone' => 'required',
+            'password' => 'required'
+        ]);
+        
+        if (!$validator->validate()) {
+            return $res->json(ResponseHelper::validationError($validator->getErrors()));
+        }
+        
+        try {
+            $pdo = $this->container->database()->getConnection();
+            
+            // Find user by phone
+            $sql = "SELECT u.*, a.account_id, a.account_name, a.password, a.is_active, a.last_login_at 
+                    FROM users u 
+                    JOIN accounts a ON u.account_id = a.account_id 
+                    WHERE u.phone = ?";
+            $stmt = $pdo->prepare($sql);
+            $stmt->execute([$data['phone']]);
+            $user = $stmt->fetch(PDO::FETCH_ASSOC);
+            
+            if (!$user) {
+                return $res->json(ResponseHelper::unauthorized('Invalid phone number or password'));
+            }
+            
+            // Verify password
+            if (!password_verify($data['password'], $user['password'])) {
+                return $res->json(ResponseHelper::unauthorized('Invalid phone number or password'));
+            }
+            
+            // Check if account is active
+            if (!$user['is_active']) {
+                return $res->json(ResponseHelper::unauthorized('Account is inactive'));
+            }
+            
+            // Check if user is a shipper
+            if (!$this->isShipper($user['user_id'])) {
+                return $res->json(ResponseHelper::forbidden('Access denied. Shipper account required.'));
+            }
+            
+            // Get shipper info
+            $shipperSql = "SELECT s.* FROM shippers s WHERE s.user_id = ?";
+            $shipperStmt = $pdo->prepare($shipperSql);
+            $shipperStmt->execute([$user['user_id']]);
+            $shipper = $shipperStmt->fetch(PDO::FETCH_ASSOC);
+            
+            if (!$shipper) {
+                return $res->json(ResponseHelper::unauthorized('Shipper record not found'));
+            }
+            
+            // Check shipper status
+            if ($shipper['status'] !== 'active') {
+                return $res->json(ResponseHelper::forbidden('Shipper account is ' . $shipper['status']));
+            }
+            
+            // Check if shipper is available (optional check, can be removed if not needed)
+            // if (!$shipper['is_available']) {
+            //     return $res->json(ResponseHelper::forbidden('Shipper is not available'));
+            // }
+            
+            // Update last login
+            $updateSql = "UPDATE accounts SET last_login_at = NOW() WHERE account_id = ?";
+            $updateStmt = $pdo->prepare($updateSql);
+            $updateStmt->execute([$user['account_id']]);
+            
+            // Generate JWT token
+            $token = $this->jwt->encode([
+                'user_id' => $user['user_id'],
+                'account_id' => $user['account_id'],
+                'account_name' => $user['account_name'],
+                'phone' => $user['phone'],
+                'roles' => ['shipper'],
+                'is_shipper' => true
+            ]);
+            
+            // Generate refresh token
+            $refreshToken = $this->refreshTokenModel->generateRefreshToken();
+            $this->refreshTokenModel->createToken($user['user_id'], $refreshToken);
+            
+            // Prepare shipper response data
+            $shipperData = [
+                'user_id' => $user['user_id'],
+                'account_id' => $user['account_id'],
+                'phone' => $user['phone'],
+                'first_name' => $user['first_name'],
+                'last_name' => $user['last_name'],
+                'email' => $user['email'],
+                'avatar_url' => $user['avatar_url'],
+                'vehicle_info' => $shipper['vehicle_info'],
+                'rating' => (float)$shipper['rating'],
+                'on_time_delivery_pct' => (float)$shipper['on_time_delivery_pct'],
+                'total_delivered' => (int)$shipper['total_delivered'],
+                'is_available' => (bool)$shipper['is_available'],
+                'status' => $shipper['status']
+            ];
+            
+            return $res->json(ResponseHelper::success([
+                'token' => $token,
+                'refresh_token' => $refreshToken,
+                'shipper' => $shipperData
+            ], 'Login successful'));
+            
+        } catch (Exception $e) {
+            error_log('[Shipper Login] Error: ' . $e->getMessage());
+            return $res->json(ResponseHelper::serverError('Login failed: ' . $e->getMessage()));
+        }
+    }
+    
+    /**
+     * Shipper Refresh Token - Mobile App Endpoint
+     * Refresh token for shippers only
+     */
+    public function shipperRefreshToken(Request $req, Response $res)
+    {
+        $data = $req->json();
+        $refreshToken = $data['refresh_token'] ?? null;
+        
+        if (!$refreshToken) {
+            return $res->json(ResponseHelper::error('Refresh token is required'));
+        }
+        
+        try {
+            // Find valid refresh token
+            $tokenData = $this->refreshTokenModel->findByToken($refreshToken);
+            
+            if (!$tokenData) {
+                return $res->json(ResponseHelper::unauthorized('Invalid or expired refresh token'));
+            }
+            
+            // Get user info
+            $pdo = $this->container->database()->getConnection();
+            $sql = "SELECT u.*, a.account_name, a.account_id 
+                    FROM users u 
+                    JOIN accounts a ON u.account_id = a.account_id 
+                    WHERE u.user_id = ?";
+            $stmt = $pdo->prepare($sql);
+            $stmt->execute([$tokenData['user_id']]);
+            $user = $stmt->fetch(PDO::FETCH_ASSOC);
+            
+            if (!$user) {
+                return $res->json(ResponseHelper::unauthorized('User not found'));
+            }
+            
+            // Validate that user is a shipper
+            if (!$this->isShipper($user['user_id'])) {
+                return $res->json(ResponseHelper::forbidden('Access denied. Shipper account required.'));
+            }
+            
+            // Generate new access token
+            $newAccessToken = $this->jwt->encode([
+                'user_id' => $user['user_id'],
+                'account_id' => $user['account_id'],
+                'account_name' => $user['account_name'],
+                'phone' => $user['phone'],
+                'roles' => ['shipper'],
+                'is_shipper' => true
+            ]);
+            
+            // Rotate refresh token for better security
+            $newRefreshToken = $this->refreshTokenModel->generateRefreshToken();
+            $this->refreshTokenModel->revokeToken($refreshToken); // Revoke old token
+            $this->refreshTokenModel->createToken($user['user_id'], $newRefreshToken); // Create new token
+            
+            return $res->json(ResponseHelper::success([
+                'access_token' => $newAccessToken,
+                'refresh_token' => $newRefreshToken
+            ], 'Token refreshed successfully'));
+            
+        } catch (Exception $e) {
+            error_log('[Shipper Refresh Token] Error: ' . $e->getMessage());
+            return $res->json(ResponseHelper::serverError('Token refresh failed: ' . $e->getMessage()));
+        }
+    }
+    
+    /**
+     * Helper method to check if user is a shipper
+     */
+    private function isShipper(int $userId): bool
+    {
+        try {
+            $pdo = $this->container->database()->getConnection();
+            $sql = "SELECT COUNT(*) FROM shippers WHERE user_id = ? AND status = 'active'";
+            $stmt = $pdo->prepare($sql);
+            $stmt->execute([$userId]);
+            $count = (int)$stmt->fetchColumn();
+            return $count > 0;
+        } catch (Exception $e) {
+            error_log('[isShipper] Error: ' . $e->getMessage());
+            return false;
+        }
+    }
 }
