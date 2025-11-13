@@ -54,12 +54,9 @@ class Account extends Model
     public function updatePassword(int $accountId, string $newPassword): bool
     {
         $hashedPassword = $this->hashPassword($newPassword);
-        $updateData = [
-            'password' => $hashedPassword,
-            'password_changed_at' => date('Y-m-d H:i:s')
-        ];
-        
-        return $this->update($accountId, $updateData);
+        $sql = "UPDATE {$this->table} SET password = ?, password_changed_at = NOW() WHERE {$this->primaryKey} = ?";
+        $stmt = $this->getConnection()->prepare($sql);
+        return $stmt->execute([$hashedPassword, $accountId]);
     }
     
     public function updateLastLogin(int $accountId): bool
@@ -81,17 +78,17 @@ class Account extends Model
     
     public function resetFailedAttempts(int $accountId): bool
     {
-        return $this->update($accountId, [
-            'failed_attempts' => 0,
-            'last_failed_login_at' => null,
-            'locked_until' => null
-        ]);
+        $sql = "UPDATE {$this->table} SET failed_attempts = 0, last_failed_login_at = NULL, locked_until = NULL WHERE {$this->primaryKey} = ?";
+        $stmt = $this->getConnection()->prepare($sql);
+        return $stmt->execute([$accountId]);
     }
     
     public function lockAccount(int $accountId, int $lockMinutes = 30): bool
     {
         $lockUntil = date('Y-m-d H:i:s', time() + ($lockMinutes * 60));
-        return $this->update($accountId, ['locked_until' => $lockUntil]);
+        $sql = "UPDATE {$this->table} SET locked_until = ? WHERE {$this->primaryKey} = ?";
+        $stmt = $this->getConnection()->prepare($sql);
+        return $stmt->execute([$lockUntil, $accountId]);
     }
     
     public function isLocked(array $account): bool
@@ -114,10 +111,9 @@ class Account extends Model
         $token = bin2hex(random_bytes(32));
         $expiresAt = date('Y-m-d H:i:s', time() + 3600); // 1 hour
         
-        $this->update($accountId, [
-            'password_reset_token' => $token,
-            'reset_token_expires_at' => $expiresAt
-        ]);
+        $sql = "UPDATE {$this->table} SET password_reset_token = ?, reset_token_expires_at = ? WHERE {$this->primaryKey} = ?";
+        $stmt = $this->getConnection()->prepare($sql);
+        $stmt->execute([$token, $expiresAt, $accountId]);
         
         return $token;
     }
@@ -136,9 +132,8 @@ class Account extends Model
     
     public function clearPasswordResetToken(int $accountId): bool
     {
-        return $this->update($accountId, [
-            'password_reset_token' => null,
-            'reset_token_expires_at' => null
-        ]);
+        $sql = "UPDATE {$this->table} SET password_reset_token = NULL, reset_token_expires_at = NULL WHERE {$this->primaryKey} = ?";
+        $stmt = $this->getConnection()->prepare($sql);
+        return $stmt->execute([$accountId]);
     }
 }

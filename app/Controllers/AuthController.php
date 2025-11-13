@@ -738,6 +738,7 @@ class AuthController extends Controller
     
     public function shipperLogin(Request $req, Response $res)
     {
+        // echo "shipperLogin";
         $data = $req->json();
         
         // Validate input
@@ -934,6 +935,215 @@ class AuthController extends Controller
         } catch (Exception $e) {
             error_log('[isShipper] Error: ' . $e->getMessage());
             return false;
+        }
+    }
+
+    /**
+     * Generate 6-digit OTP code
+     */
+    private function generateOTP(): string
+    {
+        return str_pad((string)random_int(100000, 999999), 6, '0', STR_PAD_LEFT);
+    }
+
+    /**
+     * Shipper Forgot Password - Mobile App Endpoint
+     * Send OTP code to email for password reset
+     */
+    public function shipperForgotPassword(Request $req, Response $res)
+    {
+        $data = $req->json();
+        
+        // Validate input
+        $validator = Validator::make($data, [
+            'email' => 'required|email'
+        ]);
+        
+        if (!$validator->validate()) {
+            return $res->json(ResponseHelper::validationError($validator->getErrors()));
+        }
+        
+        try {
+            $pdo = $this->container->database()->getConnection();
+            
+            // Find user by email
+            $user = $this->userModel->findByEmail($data['email']);
+            
+            if (!$user) {
+                // Don't reveal if email exists for security
+                return $res->json(ResponseHelper::success(null, 'If the email exists, an OTP code has been sent.'));
+            }
+            
+            // Verify user is a shipper
+            if (!$this->isShipper($user['user_id'])) {
+                // Don't reveal if email exists for security
+                return $res->json(ResponseHelper::success(null, 'If the email exists, an OTP code has been sent.'));
+            }
+            
+            // Get account info
+            $account = $this->accountModel->find($user['account_id']);
+            
+            if (!$account) {
+                return $res->json(ResponseHelper::success(null, 'If the email exists, an OTP code has been sent.'));
+            }
+            
+            // Generate 6-digit OTP
+            $otpCode = $this->generateOTP();
+            $expiresAt = date('Y-m-d H:i:s', strtotime('+10 minutes'));
+            
+            // Save OTP to database (reuse password_reset_token column)
+            $stmt = $pdo->prepare("UPDATE accounts SET password_reset_token = ?, reset_token_expires_at = ? WHERE account_id = ?");
+            $stmt->execute([$otpCode, $expiresAt, $account['account_id']]);
+            
+            // Send OTP via email
+            $emailService = new \App\Support\EmailService();
+            $emailSent = $emailService->sendOTPEmail($data['email'], $user['account_name'] ?? $account['account_name'], $otpCode);
+            
+            if ($emailSent) {
+                return $res->json(ResponseHelper::success([
+                    'message' => 'OTP code has been sent to your email.',
+                ], 'If the email exists, an OTP code has been sent.'));
+            } else {
+                // If email fails, still return success for security
+                return $res->json(ResponseHelper::success(null, 'If the email exists, an OTP code has been sent.'));
+            }
+            
+        } catch (Exception $e) {
+            error_log('[Shipper Forgot Password] Error: ' . $e->getMessage());
+            return $res->json(ResponseHelper::serverError('Failed to process forgot password request: ' . $e->getMessage()));
+        }
+    }
+
+    /**
+     * Shipper Verify OTP - Mobile App Endpoint
+     * Verify OTP code for password reset
+     */
+    public function shipperVerifyOTP(Request $req, Response $res)
+    {
+        $data = $req->json();
+        
+        // Validate input
+        $validator = Validator::make($data, [
+            'email' => 'required|email',
+            'otp' => 'required|string|size:6'
+        ]);
+        
+        if (!$validator->validate()) {
+            return $res->json(ResponseHelper::validationError($validator->getErrors()));
+        }
+        
+        try {
+            $pdo = $this->container->database()->getConnection();
+            
+            // Find user by email
+            $user = $this->userModel->findByEmail($data['email']);
+            
+            if (!$user) {
+                return $res->json(ResponseHelper::error('Invalid email or OTP code'));
+            }
+            
+            // Verify user is a shipper
+            if (!$this->isShipper($user['user_id'])) {
+                return $res->json(ResponseHelper::error('Invalid email or OTP code'));
+            }
+            
+            // Get account info
+            $account = $this->accountModel->find($user['account_id']);
+            
+            if (!$account) {
+                return $res->json(ResponseHelper::error('Invalid email or OTP code'));
+            }
+            
+            // Check OTP code matches and not expired
+            if ($account['password_reset_token'] !== $data['otp']) {
+                return $res->json(ResponseHelper::error('Invalid OTP code'));
+            }
+            
+            if (strtotime($account['reset_token_expires_at']) < time()) {
+                return $res->json(ResponseHelper::error('OTP code has expired. Please request a new one.'));
+            }
+            
+            // OTP is valid
+            return $res->json(ResponseHelper::success([
+                'verified' => true,
+                'message' => 'OTP verified successfully. You can now reset your password.'
+            ], 'OTP verified successfully'));
+            
+        } catch (Exception $e) {
+            error_log('[Shipper Verify OTP] Error: ' . $e->getMessage());
+            return $res->json(ResponseHelper::serverError('Failed to verify OTP: ' . $e->getMessage()));
+        }
+    }
+
+    /**
+     * Shipper Reset Password - Mobile App Endpoint
+     * Reset password after OTP verification
+     */
+    public function shipperResetPassword(Request $req, Response $res)
+    {
+        $data = $req->json();
+        
+        // Validate input
+        $validator = Validator::make($data, [
+            'email' => 'required|email',
+            'otp' => 'required|string|size:6',
+            'new_password' => 'required|min:6',
+            'confirm_password' => 'required'
+        ]);
+        
+        if (!$validator->validate()) {
+            return $res->json(ResponseHelper::validationError($validator->getErrors()));
+        }
+        
+        if ($data['new_password'] !== $data['confirm_password']) {
+            return $res->json(ResponseHelper::error('Password confirmation does not match'));
+        }
+        
+        try {
+            $pdo = $this->container->database()->getConnection();
+            
+            // Find user by email
+            $user = $this->userModel->findByEmail($data['email']);
+            
+            if (!$user) {
+                return $res->json(ResponseHelper::error('Invalid email or OTP code'));
+            }
+            
+            // Verify user is a shipper
+            if (!$this->isShipper($user['user_id'])) {
+                return $res->json(ResponseHelper::error('Invalid email or OTP code'));
+            }
+            
+            // Get account info
+            $account = $this->accountModel->find($user['account_id']);
+            
+            if (!$account) {
+                return $res->json(ResponseHelper::error('Invalid email or OTP code'));
+            }
+            
+            // Verify OTP again
+            if ($account['password_reset_token'] !== $data['otp']) {
+                return $res->json(ResponseHelper::error('Invalid OTP code'));
+            }
+            
+            if (strtotime($account['reset_token_expires_at']) < time()) {
+                return $res->json(ResponseHelper::error('OTP code has expired. Please request a new one.'));
+            }
+            
+            // Update password
+            $this->accountModel->updatePassword($account['account_id'], $data['new_password']);
+            
+            // Clear OTP token
+            $this->accountModel->clearPasswordResetToken($account['account_id']);
+            
+            // Reset failed attempts
+            $this->accountModel->resetFailedAttempts($account['account_id']);
+            
+            return $res->json(ResponseHelper::success(null, 'Password has been reset successfully. You can now login with your new password.'));
+            
+        } catch (Exception $e) {
+            error_log('[Shipper Reset Password] Error: ' . $e->getMessage());
+            return $res->json(ResponseHelper::serverError('Password reset failed: ' . $e->getMessage()));
         }
     }
 }

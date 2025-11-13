@@ -29,8 +29,83 @@ $router->post('/api/v1/auth/change-password', [AuthController::class, 'changePas
 // ========================================
 // MOBILE APP AUTHENTICATION ROUTES (SHIPPER ONLY)
 // ========================================
+$router->get('/api/mobile/v1/config', function($req, $res) {
+    // Get server IP from SERVER_ADDR
+    $serverIP = $_SERVER['SERVER_ADDR'] ?? '127.0.0.1';
+    
+    // Try to get real IP from network interfaces (Windows)
+    if (strtoupper(substr(PHP_OS, 0, 3)) === 'WIN') {
+        $output = [];
+        exec('ipconfig', $output);
+        $currentAdapter = '';
+        $foundIPs = [];
+        
+        foreach ($output as $line) {
+            // Track current adapter name
+            if (preg_match('/^([^:]+):$/', $line, $matches)) {
+                $currentAdapter = trim($matches[1]);
+            }
+            // Extract IPv4 addresses
+            if (preg_match('/IPv4 Address[^:]*:\s*(\d+\.\d+\.\d+\.\d+)/i', $line, $matches)) {
+                $ip = $matches[1];
+                // Skip localhost and auto-config IPs
+                if (strpos($ip, '127.') !== 0 && strpos($ip, '169.254.') !== 0) {
+                    $foundIPs[] = [
+                        'ip' => $ip,
+                        'adapter' => $currentAdapter ?: 'Network Adapter'
+                    ];
+                }
+            }
+        }
+        
+        // Prefer WiFi IP (192.168.x.x or 10.x.x.x) over VPN IP (172.x.x.x)
+        $wifiIP = null;
+        $vpnIP = null;
+        
+        foreach ($foundIPs as $ipInfo) {
+            $ip = $ipInfo['ip'];
+            // Check if it's WiFi IP (192.168.x.x or 10.x.x.x)
+            if (strpos($ip, '192.168.') === 0 || strpos($ip, '10.') === 0) {
+                $wifiIP = $ip;
+                break;
+            }
+            // Check if it's VPN IP (172.16-31.x.x)
+            if (strpos($ip, '172.') === 0 && !$vpnIP) {
+                $parts = explode('.', $ip);
+                if (count($parts) >= 2) {
+                    $secondOctet = (int)$parts[1];
+                    if ($secondOctet >= 16 && $secondOctet <= 31) {
+                        $vpnIP = $ip;
+                    }
+                }
+            }
+        }
+        
+        // Use WiFi IP if available, otherwise use VPN IP, otherwise use first found IP
+        if ($wifiIP) {
+            $serverIP = $wifiIP;
+        } elseif ($vpnIP) {
+            $serverIP = $vpnIP;
+        } elseif (!empty($foundIPs)) {
+            $serverIP = $foundIPs[0]['ip'];
+        }
+    }
+    
+    return $res->json([
+        'success' => true,
+        'data' => [
+            'api_url' => "http://{$serverIP}:8000",
+            'server_ip' => $serverIP,
+            'port' => 8000
+        ]
+    ]);
+});
+
 $router->post('/api/mobile/v1/auth/login', [AuthController::class, 'shipperLogin']);
 $router->post('/api/mobile/v1/auth/refresh', [AuthController::class, 'shipperRefreshToken']);
+$router->post('/api/mobile/v1/auth/forgot-password', [AuthController::class, 'shipperForgotPassword']);
+$router->post('/api/mobile/v1/auth/verify-otp', [AuthController::class, 'shipperVerifyOTP']);
+$router->post('/api/mobile/v1/auth/reset-password', [AuthController::class, 'shipperResetPassword']);
 
 // ========================================
 // ORDER MANAGEMENT ROUTES (MAIN API)
