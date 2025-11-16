@@ -43,26 +43,8 @@ class AuthMiddleware
             // Debug: log payload to see what we get
             error_log("AuthMiddleware payload: " . json_encode($payload));
             
-            // Check if this is account-based authentication (like admin login)
-            if (isset($payload['account_id'])) {
-                $sql = "SELECT account_id as user_id, account_name, account_type, is_active as account_active
-                        FROM accounts 
-                        WHERE account_id = ? AND is_active = 1";
-                
-                $stmt = $pdo->prepare($sql);
-                $stmt->execute([$payload['account_id']]);
-                $user = $stmt->fetch();
-                
-                if ($user) {
-                    // Set roles based on account_type or from token
-                    $user['roles'] = $payload['roles'] ?? [$user['account_type'] ?? 'user'];
-                    $user['account_type'] = $user['account_type']; // Preserve account_type
-                    error_log("AuthMiddleware user after account query: " . json_encode($user));
-                }
-            }
-            
-            // If no account found and user_id is available, try users table
-            if (!$user && isset($payload['user_id'])) {
+            // Priority: If user_id is available, query users table first (for shipper/customer auth)
+            if (isset($payload['user_id'])) {
                 $sql = "SELECT u.*, 
                                GROUP_CONCAT(r.role_name) as roles,
                                a.account_name,
@@ -80,7 +62,26 @@ class AuthMiddleware
                 
                 if ($user) {
                     // Parse roles from users table query
-                    $user['roles'] = $user['roles'] ? explode(',', $user['roles']) : ['customer'];
+                    $user['roles'] = $user['roles'] ? explode(',', $user['roles']) : ($payload['roles'] ?? ['customer']);
+                    error_log("AuthMiddleware user after users query: " . json_encode($user));
+                }
+            }
+            
+            // If no user found and account_id is available, try accounts table (for admin login)
+            if (!$user && isset($payload['account_id'])) {
+                $sql = "SELECT account_id as user_id, account_name, account_type, is_active as account_active
+                        FROM accounts 
+                        WHERE account_id = ? AND is_active = 1";
+                
+                $stmt = $pdo->prepare($sql);
+                $stmt->execute([$payload['account_id']]);
+                $user = $stmt->fetch();
+                
+                if ($user) {
+                    // Set roles based on account_type or from token
+                    $user['roles'] = $payload['roles'] ?? [$user['account_type'] ?? 'user'];
+                    $user['account_type'] = $user['account_type']; // Preserve account_type
+                    error_log("AuthMiddleware user after account query: " . json_encode($user));
                 }
             }
             

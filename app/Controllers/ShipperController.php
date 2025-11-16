@@ -531,4 +531,227 @@ class ShipperController extends Controller
             $res->json(ResponseHelper::serverError('Failed to assign order: ' . $e->getMessage()));
         }
     }
+
+    /**
+     * POST /api/v1/shipper/fcm-token - Register FCM token for push notifications
+     * 
+     * @param Request $req
+     * @param Response $res
+     * @return void
+     */
+    public function registerFCMToken(Request $req, Response $res): void
+    {
+        try {
+            $user = $req->getAttribute('user');
+            $shipperId = (int) ($user['user_id'] ?? 0);
+
+            if (!$shipperId) {
+                $res->json(ResponseHelper::unauthorized('Shipper ID not found in token'));
+                return;
+            }
+
+            // Verify user is a shipper
+            $stmt = $this->pdo->prepare("SELECT user_id FROM shippers WHERE user_id = ?");
+            $stmt->execute([$shipperId]);
+            $shipper = $stmt->fetch(PDO::FETCH_ASSOC);
+
+            if (!$shipper) {
+                $res->json(ResponseHelper::forbidden('User is not a shipper'));
+                return;
+            }
+
+            $data = $req->json();
+            $fcmToken = $data['fcm_token'] ?? null;
+
+            if (empty($fcmToken)) {
+                $res->json(ResponseHelper::validationError(['fcm_token' => 'FCM token is required']));
+                return;
+            }
+
+            // Update FCM token in shippers table
+            $updateSql = "UPDATE shippers SET fcm_token = ?, fcm_token_updated_at = NOW() WHERE user_id = ?";
+            $updateStmt = $this->pdo->prepare($updateSql);
+            $result = $updateStmt->execute([$fcmToken, $shipperId]);
+
+            if ($result) {
+                error_log("[ShipperController] FCM token registered for shipper: {$shipperId}");
+                $res->json(ResponseHelper::success(null, 'FCM token registered successfully'));
+            } else {
+                $res->json(ResponseHelper::serverError('Failed to register FCM token'));
+            }
+
+        } catch (Exception $e) {
+            error_log('[ShipperController] Error registering FCM token: ' . $e->getMessage());
+            $res->json(ResponseHelper::serverError('Failed to register FCM token: ' . $e->getMessage()));
+        }
+    }
+
+    /**
+     * GET /api/v1/shipper/notifications - Get notifications list
+     * 
+     * @param Request $req
+     * @param Response $res
+     * @return void
+     */
+    public function getNotifications(Request $req, Response $res): void
+    {
+        try {
+            $user = $req->getAttribute('user');
+            $shipperId = (int) ($user['user_id'] ?? 0);
+
+            if (!$shipperId) {
+                $res->json(ResponseHelper::unauthorized('Shipper ID not found in token'));
+                return;
+            }
+
+            $page = (int)($req->query('page') ?? 1);
+            $limit = (int)($req->query('limit') ?? 50);
+            $offset = ($page - 1) * $limit;
+            $isRead = $req->query('is_read');
+
+            $sql = "SELECT * FROM notifications WHERE user_id = ?";
+            $params = [$shipperId];
+
+            if ($isRead !== null) {
+                $sql .= " AND is_read = ?";
+                $params[] = $isRead === '1' || $isRead === 'true' ? 1 : 0;
+            }
+
+            $sql .= " ORDER BY created_at DESC LIMIT ? OFFSET ?";
+            $params[] = $limit;
+            $params[] = $offset;
+
+            $stmt = $this->pdo->prepare($sql);
+            $stmt->execute($params);
+            $notifications = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+            // Parse payload JSON
+            foreach ($notifications as &$notification) {
+                if (!empty($notification['payload'])) {
+                    $notification['payload'] = json_decode($notification['payload'], true);
+                }
+            }
+
+            $res->json(ResponseHelper::success($notifications));
+
+        } catch (Exception $e) {
+            error_log('[ShipperController] Error getting notifications: ' . $e->getMessage());
+            $res->json(ResponseHelper::serverError('Failed to get notifications: ' . $e->getMessage()));
+        }
+    }
+
+    /**
+     * GET /api/v1/shipper/notifications/unread-count - Get unread notification count
+     * 
+     * @param Request $req
+     * @param Response $res
+     * @return void
+     */
+    public function getUnreadCount(Request $req, Response $res): void
+    {
+        try {
+            $user = $req->getAttribute('user');
+            $shipperId = (int) ($user['user_id'] ?? 0);
+
+            if (!$shipperId) {
+                $res->json(ResponseHelper::unauthorized('Shipper ID not found in token'));
+                return;
+            }
+
+            $sql = "SELECT COUNT(*) as count FROM notifications WHERE user_id = ? AND is_read = 0";
+            $stmt = $this->pdo->prepare($sql);
+            $stmt->execute([$shipperId]);
+            $result = $stmt->fetch(PDO::FETCH_ASSOC);
+
+            $count = (int) ($result['count'] ?? 0);
+
+            $res->json(ResponseHelper::success(['unread_count' => $count]));
+
+        } catch (Exception $e) {
+            error_log('[ShipperController] Error getting unread count: ' . $e->getMessage());
+            $res->json(ResponseHelper::serverError('Failed to get unread count: ' . $e->getMessage()));
+        }
+    }
+
+    /**
+     * POST /api/v1/shipper/notifications/{id}/read - Mark notification as read
+     * 
+     * @param Request $req
+     * @param Response $res
+     * @return void
+     */
+    public function markNotificationAsRead(Request $req, Response $res): void
+    {
+        try {
+            $user = $req->getAttribute('user');
+            $shipperId = (int) ($user['user_id'] ?? 0);
+            $notificationId = (int) $req->getAttribute('id');
+
+            if (!$shipperId) {
+                $res->json(ResponseHelper::unauthorized('Shipper ID not found in token'));
+                return;
+            }
+
+            // Verify notification belongs to shipper
+            $checkSql = "SELECT notification_id FROM notifications WHERE notification_id = ? AND user_id = ?";
+            $checkStmt = $this->pdo->prepare($checkSql);
+            $checkStmt->execute([$notificationId, $shipperId]);
+            $notification = $checkStmt->fetch(PDO::FETCH_ASSOC);
+
+            if (!$notification) {
+                $res->json(ResponseHelper::notFound('Notification not found'));
+                return;
+            }
+
+            // Mark as read
+            $updateSql = "UPDATE notifications SET is_read = 1, read_at = NOW() WHERE notification_id = ? AND user_id = ?";
+            $updateStmt = $this->pdo->prepare($updateSql);
+            $result = $updateStmt->execute([$notificationId, $shipperId]);
+
+            if ($result) {
+                $res->json(ResponseHelper::success(null, 'Notification marked as read'));
+            } else {
+                $res->json(ResponseHelper::serverError('Failed to mark notification as read'));
+            }
+
+        } catch (Exception $e) {
+            error_log('[ShipperController] Error marking notification as read: ' . $e->getMessage());
+            $res->json(ResponseHelper::serverError('Failed to mark notification as read: ' . $e->getMessage()));
+        }
+    }
+
+    /**
+     * POST /api/v1/shipper/notifications/mark-all-read - Mark all notifications as read
+     * 
+     * @param Request $req
+     * @param Response $res
+     * @return void
+     */
+    public function markAllNotificationsAsRead(Request $req, Response $res): void
+    {
+        try {
+            $user = $req->getAttribute('user');
+            $shipperId = (int) ($user['user_id'] ?? 0);
+
+            if (!$shipperId) {
+                $res->json(ResponseHelper::unauthorized('Shipper ID not found in token'));
+                return;
+            }
+
+            // Mark all as read
+            $updateSql = "UPDATE notifications SET is_read = 1, read_at = NOW() WHERE user_id = ? AND is_read = 0";
+            $updateStmt = $this->pdo->prepare($updateSql);
+            $result = $updateStmt->execute([$shipperId]);
+
+            if ($result) {
+                $res->json(ResponseHelper::success(null, 'All notifications marked as read'));
+            } else {
+                $res->json(ResponseHelper::serverError('Failed to mark all notifications as read'));
+            }
+
+        } catch (Exception $e) {
+            error_log('[ShipperController] Error marking all notifications as read: ' . $e->getMessage());
+            $res->json(ResponseHelper::serverError('Failed to mark all notifications as read: ' . $e->getMessage()));
+        }
+    }
 }

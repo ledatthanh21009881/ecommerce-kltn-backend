@@ -23,6 +23,8 @@ class Order extends Model
         'shipping_fee',
         'cod_amount',
         'status',
+        'shipping_status',
+        'shipping_status_updated_at',
         'note',
         'internal_note',
         'estimated_delivery_at',
@@ -30,6 +32,28 @@ class Order extends Model
         'shipping_address_snapshot',
         'shipping_method_name_snapshot',
         'voucher_summary_snapshot'
+    ];
+
+    public const SHIPPING_STATUSES = [
+        'new_request',
+        'accepted',
+        'picked_up',
+        'delivering',
+        'arrived',
+        'delivered',
+        'completed',
+        'rejected'
+    ];
+
+    public const SHIPPING_TRANSITIONS = [
+        'new_request' => ['accepted', 'rejected'],
+        'accepted' => ['picked_up', 'rejected'],
+        'picked_up' => ['delivering'],
+        'delivering' => ['arrived'],
+        'arrived' => ['delivered'],
+        'delivered' => ['completed'],
+        'completed' => [],
+        'rejected' => []
     ];
 
     public function getAll(array $filters = [], int $limit = 20, int $offset = 0): array
@@ -61,6 +85,11 @@ class Order extends Model
         if (!empty($filters['status'])) {
             $whereConditions[] = "o.status = ?";
             $params[] = $filters['status'];
+        }
+        
+        if (!empty($filters['shipping_status'])) {
+            $whereConditions[] = "o.shipping_status = ?";
+            $params[] = $filters['shipping_status'];
         }
         
         if (!empty($filters['customer_id'])) {
@@ -115,6 +144,11 @@ class Order extends Model
         if (!empty($filters['status'])) {
             $whereConditions[] = "o.status = ?";
             $params[] = $filters['status'];
+        }
+        
+        if (!empty($filters['shipping_status'])) {
+            $whereConditions[] = "o.shipping_status = ?";
+            $params[] = $filters['shipping_status'];
         }
         
         if (!empty($filters['customer_id'])) {
@@ -194,6 +228,10 @@ class Order extends Model
         
         // Get shipping tracking
         $order['tracking'] = $this->getShippingTracking($id);
+
+        // Shipping workflow timeline
+        $order['delivery_events'] = $this->getDeliveryEvents($id);
+        $order['delivery_proofs'] = $this->getDeliveryProofs($id);
         
         // Get payment info
         $order['payment'] = $this->getPaymentInfo($id);
@@ -299,6 +337,13 @@ class Order extends Model
             
             // Log initial status
             $this->logStatusChange($orderId, $data['status'], $data['customer_id'], 'Đơn hàng được tạo');
+            $this->logShippingEvent(
+                $orderId,
+                null,
+                $data['shipping_status'] ?? 'new_request',
+                $data['customer_id'] ?? null,
+                ['note' => 'Shipping workflow initialized']
+            );
             
             $this->getConnection()->commit();
             return $orderId;
@@ -518,5 +563,245 @@ class Order extends Model
             $dataBefore ? json_encode($dataBefore) : null,
             $dataAfter ? json_encode($dataAfter) : null
         ]);
+    }
+
+    public function getOrdersByShipper(int $shipperId, array $filters = [], int $limit = 20, int $offset = 0): array
+    {
+        $sql = "
+            SELECT 
+                o.*,
+                c.loyalty_points,
+                c.total_orders,
+                u.first_name,
+                u.last_name,
+                u.email,
+                u.phone,
+                sm.name as shipping_method_name,
+                v.code as voucher_code,
+                v.discount_type as voucher_discount_type,
+                v.discount_amount as voucher_discount_amount,
+                st.confirmed_delivery_at,
+                st.current_lat,
+                st.current_lng,
+                st.photo_proof_url,
+                (SELECT COUNT(*) FROM order_items oi WHERE oi.order_id = o.order_id) as item_count
+            FROM shipping_tracking st
+            INNER JOIN {$this->table} o ON st.order_id = o.order_id
+            LEFT JOIN customers c ON o.customer_id = c.user_id
+            LEFT JOIN users u ON c.user_id = u.user_id
+            LEFT JOIN shipping_methods sm ON o.shipping_method_id = sm.shipping_method_id
+            LEFT JOIN vouchers v ON o.voucher_id = v.voucher_id
+            WHERE st.shipper_id = ?
+        ";
+        
+        $params = [$shipperId];
+        
+        // Filter by shipping status first (fallback to order status for backward compatibility)
+        $shippingStatusFilter = $filters['shipping_status'] ?? $filters['status'] ?? null;
+        if ($shippingStatusFilter) {
+            $sql .= " AND o.shipping_status = ?";
+            $params[] = $shippingStatusFilter;
+        } else {
+            $sql .= " AND o.shipping_status IN ('new_request','accepted','picked_up','delivering','arrived','delivered')";
+        }
+        
+        $sql .= " ORDER BY o.created_at DESC LIMIT ? OFFSET ?";
+        $params[] = $limit;
+        $params[] = $offset;
+        
+        $stmt = $this->getConnection()->prepare($sql);
+        $stmt->execute($params);
+        $orders = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        
+        // Get order items for each order
+        foreach ($orders as &$order) {
+            $order['items'] = $this->getOrderItems((int)$order['order_id']);
+            
+            // Parse shipping address snapshot if exists
+            if (!empty($order['shipping_address_snapshot'])) {
+                $addressData = json_decode($order['shipping_address_snapshot'], true);
+                if ($addressData) {
+                    $order['shipping_address'] = $addressData;
+                }
+            }
+
+            $order['delivery_events'] = $this->getDeliveryEvents((int)$order['order_id']);
+            $order['delivery_proofs'] = $this->getDeliveryProofs((int)$order['order_id']);
+        }
+        
+        return $orders;
+    }
+
+    public function getOrdersByShipperCount(int $shipperId, array $filters = []): int
+    {
+        $sql = "
+            SELECT COUNT(*) 
+            FROM shipping_tracking st
+            INNER JOIN {$this->table} o ON st.order_id = o.order_id
+            WHERE st.shipper_id = ?
+        ";
+        
+        $params = [$shipperId];
+        
+        $shippingStatusFilter = $filters['shipping_status'] ?? $filters['status'] ?? null;
+        if ($shippingStatusFilter) {
+            $sql .= " AND o.shipping_status = ?";
+            $params[] = $shippingStatusFilter;
+        } else {
+            $sql .= " AND o.shipping_status IN ('new_request','accepted','picked_up','delivering','arrived','delivered')";
+        }
+        
+        $stmt = $this->getConnection()->prepare($sql);
+        $stmt->execute($params);
+        return (int) $stmt->fetchColumn();
+    }
+
+    public function updateShippingStatus(int $orderId, string $statusTo, int $shipperId, array $eventData = [], bool $force = false): array
+    {
+        $this->getConnection()->beginTransaction();
+
+        try {
+            $stmt = $this->getConnection()->prepare("SELECT shipping_status FROM {$this->table} WHERE {$this->primaryKey} = ? FOR UPDATE");
+            $stmt->execute([$orderId]);
+            $currentStatus = $stmt->fetchColumn();
+
+            if ($currentStatus === false) {
+                throw new Exception('Order not found', 404);
+            }
+
+            $currentStatus = $currentStatus ?: 'new_request';
+
+            if (!$force) {
+                $allowedTransitions = self::SHIPPING_TRANSITIONS[$currentStatus] ?? [];
+                if (!in_array($statusTo, $allowedTransitions, true)) {
+                    throw new Exception("Invalid shipping status transition from {$currentStatus} to {$statusTo}", 422);
+                }
+            }
+
+            $updateSql = "UPDATE {$this->table} SET shipping_status = ?, shipping_status_updated_at = NOW() WHERE {$this->primaryKey} = ?";
+            $updateStmt = $this->getConnection()->prepare($updateSql);
+            $updateStmt->execute([$statusTo, $orderId]);
+
+            $eventId = $this->logShippingEvent($orderId, $currentStatus ?: null, $statusTo, $shipperId, $eventData);
+
+            $this->getConnection()->commit();
+            return [
+                'previous_status' => $currentStatus,
+                'event_id' => $eventId
+            ];
+        } catch (Exception $e) {
+            $this->getConnection()->rollBack();
+            throw $e;
+        }
+    }
+
+    public function logShippingEvent(
+        int $orderId,
+        ?string $statusFrom,
+        string $statusTo,
+        ?int $shipperId = null,
+        array $eventData = []
+    ): int {
+        $sql = "
+            INSERT INTO order_delivery_events (
+                order_id,
+                shipper_id,
+                status_from,
+                status_to,
+                note,
+                photo_url,
+                latitude,
+                longitude,
+                metadata,
+                created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+        ";
+
+        $stmt = $this->getConnection()->prepare($sql);
+        $stmt->execute([
+            $orderId,
+            $shipperId,
+            $statusFrom,
+            $statusTo,
+            $eventData['note'] ?? null,
+            $eventData['photo_url'] ?? null,
+            $eventData['latitude'] ?? null,
+            $eventData['longitude'] ?? null,
+            isset($eventData['metadata']) ? json_encode($eventData['metadata']) : null,
+        ]);
+
+        return (int)$this->getConnection()->lastInsertId();
+    }
+
+    public function addDeliveryProof(
+        int $orderId,
+        int $shipperId,
+        string $status,
+        string $photoUrl,
+        string $proofType = 'delivery_photo',
+        ?float $latitude = null,
+        ?float $longitude = null,
+        array $metadata = []
+    ): int {
+        $sql = "
+            INSERT INTO order_delivery_proofs (
+                order_id,
+                shipper_id,
+                status,
+                photo_url,
+                proof_type,
+                latitude,
+                longitude,
+                metadata,
+                captured_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW())
+        ";
+
+        $stmt = $this->getConnection()->prepare($sql);
+        $stmt->execute([
+            $orderId,
+            $shipperId,
+            $status,
+            $photoUrl,
+            $proofType,
+            $latitude,
+            $longitude,
+            $metadata ? json_encode($metadata) : null
+        ]);
+
+        return (int)$this->getConnection()->lastInsertId();
+    }
+
+    public function getDeliveryEvents(int $orderId): array
+    {
+        $sql = "
+            SELECT *
+            FROM order_delivery_events
+            WHERE order_id = ?
+            ORDER BY created_at DESC
+        ";
+
+        $stmt = $this->getConnection()->prepare($sql);
+        $stmt->execute([$orderId]);
+        return $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+    }
+
+    public function getDeliveryProofs(int $orderId): array
+    {
+        $sql = "
+            SELECT *
+            FROM order_delivery_proofs
+            WHERE order_id = ?
+            ORDER BY captured_at DESC
+        ";
+
+        $stmt = $this->getConnection()->prepare($sql);
+        $stmt->execute([$orderId]);
+        return $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+    }
+
+    public function forceShippingStatus(int $orderId, string $status, int $shipperId, array $eventData = []): array
+    {
+        return $this->updateShippingStatus($orderId, $status, $shipperId, $eventData, true);
     }
 }

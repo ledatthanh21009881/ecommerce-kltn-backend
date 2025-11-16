@@ -7,6 +7,7 @@ use App\Core\{Controller, Request, Response, Container};
 use App\Domain\Orders\{Order, OrderItem};
 use App\Support\ResponseHelper;
 use App\Core\Validator;
+use App\Services\NotificationService;
 use Exception;
 use PDO;
 
@@ -14,12 +15,14 @@ class OrderController extends Controller
 {
     private Order $orderModel;
     private OrderItem $orderItemModel;
+    private array $shippingTransitions;
     
     public function __construct(Container $container)
     {
         parent::__construct($container);
         $this->orderModel = new Order($container->get('database'));
         $this->orderItemModel = new OrderItem($container->get('database'));
+        $this->shippingTransitions = Order::SHIPPING_TRANSITIONS;
     }
     
     /**
@@ -35,6 +38,9 @@ class OrderController extends Controller
             $filters = [];
             if ($req->query('status')) {
                 $filters['status'] = $req->query('status');
+            }
+            if ($req->query('shipping_status')) {
+                $filters['shipping_status'] = $req->query('shipping_status');
             }
             if ($req->query('customer_id')) {
                 $filters['customer_id'] = $req->query('customer_id');
@@ -172,6 +178,7 @@ class OrderController extends Controller
                 'shipping_fee' => $shippingFee,
                 'cod_amount' => $data['cod_amount'] ?? 0,
                 'status' => 'pending',
+                'shipping_status' => 'new_request',
                 'note' => $data['note'] ?? '',
                 'internal_note' => $data['internal_note'] ?? '',
                 'estimated_delivery_at' => $data['estimated_delivery_at'] ?? null
@@ -291,7 +298,8 @@ class OrderController extends Controller
                 return $res->json(ResponseHelper::validationError($validator->getErrors()));
             }
             
-            $changedBy = $req->user['user_id'] ?? 1; // Default to admin user
+            $user = $req->getAttribute('user');
+            $changedBy = $user['user_id'] ?? 1; // Default to admin user
             error_log("Changed by user ID: " . $changedBy);
             
             $reason = $data['reason'] ?? '';
@@ -366,17 +374,146 @@ class OrderController extends Controller
                 return $res->json(ResponseHelper::validationError($validator->getErrors()));
             }
             
-            $assignedBy = $req->user['user_id'] ?? 1; // Default to admin user
+            $pdo = $this->container->database()->getConnection();
+            $user = $req->getAttribute('user');
+            $assignedBy = $user['user_id'] ?? 1;
             
+            // 1. Kiểm tra đơn hàng tồn tại
+            $order = $this->orderModel->find($id);
+            if (!$order) {
+                return $res->json(ResponseHelper::notFound('Order not found'));
+            }
+            
+            // 2. Kiểm tra status đơn hàng - chỉ cho phép gán khi pending hoặc processing
+            $allowedStatuses = ['pending', 'processing'];
+            if (!in_array($order['status'], $allowedStatuses)) {
+                return $res->json(ResponseHelper::forbidden(
+                    "Cannot assign shipper. Order status must be 'pending' or 'processing'. Current status: {$order['status']}"
+                ));
+            }
+            
+            // 3. Kiểm tra đơn đã được gán chưa
+            $trackingSql = "SELECT shipper_id FROM shipping_tracking WHERE order_id = ?";
+            $trackingStmt = $pdo->prepare($trackingSql);
+            $trackingStmt->execute([$id]);
+            $existingAssignment = $trackingStmt->fetch(PDO::FETCH_ASSOC);
+            $shouldResetShippingStatus = false;
+            
+            if ($existingAssignment) {
+                $currentShipperId = (int)$existingAssignment['shipper_id'];
+                
+                // Nếu đang gán lại cho cùng shipper → OK
+                if ($currentShipperId === (int)$data['shipper_id']) {
+                    $updatedOrder = $this->orderModel->getByIdWithDetails($id);
+                    return $res->json(ResponseHelper::success($updatedOrder, 'Shipper already assigned to this order'));
+                }
+                
+                // Nếu đơn đang ở status 'shipping' → không cho phép thay đổi shipper
+                if ($order['status'] === 'shipping') {
+                    return $res->json(ResponseHelper::forbidden(
+                        'Cannot reassign shipper. Order is already being delivered. Please cancel the order first if you need to change shipper.'
+                    ));
+                }
+                
+                // Nếu đơn ở 'processing' → cho phép thay đổi shipper
+                $oldShipperId = $currentShipperId;
+                $shouldResetShippingStatus = true;
+            }
+            
+            // 4. Kiểm tra shipper tồn tại và available
+            $shipperSql = "SELECT user_id, is_available, status FROM shippers WHERE user_id = ?";
+            $shipperStmt = $pdo->prepare($shipperSql);
+            $shipperStmt->execute([$data['shipper_id']]);
+            $shipper = $shipperStmt->fetch(PDO::FETCH_ASSOC);
+            
+            if (!$shipper) {
+                return $res->json(ResponseHelper::notFound('Shipper not found'));
+            }
+            
+            if (!$shipper['is_available'] || $shipper['status'] !== 'active') {
+                return $res->json(ResponseHelper::forbidden('Shipper is not available or inactive'));
+            }
+            
+            if (!$existingAssignment) {
+                $shouldResetShippingStatus = true;
+            }
+
+            // 5. Gán shipper
+            $oldShipperId = $existingAssignment['shipper_id'] ?? null;
             $result = $this->orderModel->assignShipper($id, $data['shipper_id'], $assignedBy);
+            
             if (!$result) {
                 return $res->json(ResponseHelper::serverError('Failed to assign shipper'));
             }
             
-            $order = $this->orderModel->getByIdWithDetails($id);
-            return $res->json(ResponseHelper::success($order, 'Shipper assigned successfully'));
+            // 6. Cập nhật status đơn hàng thành 'processing' nếu đang là 'pending'
+            if ($order['status'] === 'pending') {
+                $this->orderModel->updateStatus($id, 'processing', $assignedBy, 'Order assigned to shipper');
+            }
+            
+            // 7. Log thay đổi shipper nếu có
+            if ($existingAssignment && isset($oldShipperId) && $oldShipperId !== (int)$data['shipper_id']) {
+                $this->orderModel->logActivity(
+                    $id, 
+                    'reassign_shipper', 
+                    $assignedBy, 
+                    ['shipper_id' => $oldShipperId], 
+                    ['shipper_id' => $data['shipper_id']]
+                );
+            }
+
+            if ($shouldResetShippingStatus) {
+                try {
+                    $this->orderModel->forceShippingStatus(
+                        $id,
+                        'new_request',
+                        (int)$data['shipper_id'],
+                        ['note' => 'Order assigned to shipper']
+                    );
+                } catch (Exception $e) {
+                    error_log('[Assign Shipper] Failed to reset shipping status: ' . $e->getMessage());
+                }
+            }
+            
+            // 8. Lấy thông tin đơn hàng đã cập nhật
+            $updatedOrder = $this->orderModel->getByIdWithDetails($id);
+            
+            // 9. Send push notification to shipper
+            try {
+                $pdo = $this->container->database()->getConnection();
+                $notificationService = new NotificationService($pdo);
+                
+                $shipperId = (int)$data['shipper_id'];
+                $orderId = $id;
+                $title = "Đơn hàng mới được gán";
+                $message = "Bạn có đơn hàng #{$orderId} mới cần xử lý";
+                $dataPayload = [
+                    'order_id' => $orderId,
+                    'type' => 'new_order_assigned'
+                ];
+                
+                $notificationService->sendPushNotification(
+                    $shipperId,
+                    $title,
+                    $message,
+                    $dataPayload,
+                    'new_order_assigned'
+                );
+                
+                error_log("[OrderController] Push notification sent to shipper: {$shipperId} for order: {$orderId}");
+            } catch (Exception $e) {
+                // Log error but don't fail the assignment
+                error_log('[OrderController] Error sending push notification: ' . $e->getMessage());
+            }
+            
+            $message = $existingAssignment && isset($oldShipperId) && $oldShipperId !== (int)$data['shipper_id']
+                ? 'Shipper reassigned successfully' 
+                : 'Shipper assigned successfully';
+                
+            return $res->json(ResponseHelper::success($updatedOrder, $message));
             
         } catch (Exception $e) {
+            error_log('[Assign Shipper] Error: ' . $e->getMessage());
             return $res->json(ResponseHelper::serverError('Failed to assign shipper: ' . $e->getMessage()));
         }
     }
@@ -396,6 +533,271 @@ class OrderController extends Controller
     }
     
     /**
+     * GET /api/v1/shipper/orders - Lấy danh sách đơn hàng của shipper
+     */
+    public function shipperOrders(Request $req, Response $res)
+    {
+        try {
+            // Lấy shipper_id từ JWT token
+            $user = $req->getAttribute('user');
+            $shipperId = (int) ($user['user_id'] ?? 0);
+            
+            if (!$shipperId) {
+                return $res->json(ResponseHelper::unauthorized('Shipper ID not found in token'));
+            }
+            
+            // Kiểm tra user có phải shipper không
+            $pdo = $this->container->database()->getConnection();
+            $stmt = $pdo->prepare("SELECT user_id FROM shippers WHERE user_id = ?");
+            $stmt->execute([$shipperId]);
+            $shipper = $stmt->fetch(PDO::FETCH_ASSOC);
+            
+            if (!$shipper) {
+                return $res->json(ResponseHelper::forbidden('User is not a shipper'));
+            }
+            
+            // Lấy pagination params
+            $page = (int)($req->query('page') ?? 1);
+            $limit = (int)($req->query('limit') ?? 20);
+            $offset = ($page - 1) * $limit;
+            
+            // Lấy filter params
+            $filters = [];
+            if ($req->query('status')) {
+                $filters['status'] = $req->query('status');
+            }
+            if ($req->query('shipping_status')) {
+                $filters['shipping_status'] = $req->query('shipping_status');
+            }
+            
+            // Lấy đơn hàng
+            $orders = $this->orderModel->getOrdersByShipper($shipperId, $filters, $limit, $offset);
+            $total = $this->orderModel->getOrdersByShipperCount($shipperId, $filters);
+            
+            return $res->json(ResponseHelper::paginated($orders, $total, $limit, $page));
+            
+        } catch (Exception $e) {
+            error_log('[Shipper Orders] Error: ' . $e->getMessage());
+            return $res->json(ResponseHelper::serverError('Failed to fetch shipper orders: ' . $e->getMessage()));
+        }
+    }
+
+    public function shipperOrderDetail(Request $req, Response $res)
+    {
+        try {
+            $orderId = (int)$req->getAttribute('id');
+            $user = $req->getAttribute('user');
+            $shipperId = (int)($user['user_id'] ?? 0);
+
+            if (!$shipperId) {
+                return $res->json(ResponseHelper::unauthorized('Shipper ID not found in token'));
+            }
+
+            $this->getShipperOrderContext($orderId, $shipperId);
+            $order = $this->orderModel->getByIdWithDetails($orderId);
+
+            if (!$order) {
+                return $res->json(ResponseHelper::notFound('Order not found'));
+            }
+
+            return $res->json(ResponseHelper::success($order));
+        } catch (Exception $e) {
+            return $this->shippingErrorResponse($res, $e);
+        }
+    }
+    
+    /**
+     * POST /api/v1/shipper/orders/{id}/accept - Shipper nhận đơn hàng
+     */
+    public function acceptOrder(Request $req, Response $res)
+    {
+        try {
+            $orderId = (int) $req->getAttribute('id');
+            $user = $req->getAttribute('user');
+            $shipperId = (int) ($user['user_id'] ?? 0);
+            
+            if (!$shipperId) {
+                return $res->json(ResponseHelper::unauthorized('Shipper ID not found in token'));
+            }
+            
+            $payload = $this->parseShippingPayload($req);
+            try {
+                $updatedOrder = $this->performShippingTransition($orderId, $shipperId, 'accepted', $payload);
+                return $res->json(ResponseHelper::success($updatedOrder, 'Order accepted successfully'));
+            } catch (Exception $workflowException) {
+                return $this->shippingErrorResponse($res, $workflowException);
+            }
+        } catch (Exception $e) {
+            return $res->json(ResponseHelper::serverError('Failed to accept order: ' . $e->getMessage()));
+        }
+    }
+    
+    /**
+     * POST /api/v1/shipper/orders/{id}/pickup - Shipper lấy hàng
+     */
+    public function pickupOrder(Request $req, Response $res)
+    {
+        try {
+            $orderId = (int) $req->getAttribute('id');
+            $user = $req->getAttribute('user');
+            $shipperId = (int) ($user['user_id'] ?? 0);
+            
+            if (!$shipperId) {
+                return $res->json(ResponseHelper::unauthorized('Shipper ID not found in token'));
+            }
+            
+            $payload = $this->parseShippingPayload($req);
+            try {
+                $updatedOrder = $this->performShippingTransition($orderId, $shipperId, 'picked_up', $payload, [
+                    'require_photo' => true,
+                    'require_location' => true,
+                    'require_proof' => true,
+                    'proof_type' => 'pickup_photo'
+                ]);
+                return $res->json(ResponseHelper::success($updatedOrder, 'Order picked up successfully'));
+            } catch (Exception $workflowException) {
+                return $this->shippingErrorResponse($res, $workflowException);
+            }
+        } catch (Exception $e) {
+            return $res->json(ResponseHelper::serverError('Failed to pickup order: ' . $e->getMessage()));
+        }
+    }
+    
+    /**
+     * POST /api/v1/shipper/orders/{id}/deliver - Shipper giao hàng
+     */
+    public function deliverOrder(Request $req, Response $res)
+    {
+        try {
+            $orderId = (int) $req->getAttribute('id');
+            $user = $req->getAttribute('user');
+            $shipperId = (int) ($user['user_id'] ?? 0);
+            $payload = $this->parseShippingPayload($req);
+            
+            if (!$shipperId) {
+                return $res->json(ResponseHelper::unauthorized('Shipper ID not found in token'));
+            }
+            
+            try {
+                $updatedOrder = $this->performShippingTransition($orderId, $shipperId, 'delivered', $payload, [
+                    'require_photo' => true,
+                    'require_location' => true,
+                    'require_proof' => true,
+                    'proof_type' => 'delivery_photo'
+                ]);
+                return $res->json(ResponseHelper::success($updatedOrder, 'Order delivered successfully'));
+            } catch (Exception $workflowException) {
+                return $this->shippingErrorResponse($res, $workflowException);
+            }
+        } catch (Exception $e) {
+            return $res->json(ResponseHelper::serverError('Failed to deliver order: ' . $e->getMessage()));
+        }
+    }
+
+    public function startDelivery(Request $req, Response $res)
+    {
+        try {
+            $orderId = (int) $req->getAttribute('id');
+            $user = $req->getAttribute('user');
+            $shipperId = (int) ($user['user_id'] ?? 0);
+
+            if (!$shipperId) {
+                return $res->json(ResponseHelper::unauthorized('Shipper ID not found in token'));
+            }
+
+            $payload = $this->parseShippingPayload($req);
+
+            try {
+                $updatedOrder = $this->performShippingTransition($orderId, $shipperId, 'delivering', $payload);
+                return $res->json(ResponseHelper::success($updatedOrder, 'Delivery started'));
+            } catch (Exception $workflowException) {
+                return $this->shippingErrorResponse($res, $workflowException);
+            }
+        } catch (Exception $e) {
+            return $res->json(ResponseHelper::serverError('Failed to start delivery: ' . $e->getMessage()));
+        }
+    }
+
+    public function arriveOrder(Request $req, Response $res)
+    {
+        try {
+            $orderId = (int) $req->getAttribute('id');
+            $user = $req->getAttribute('user');
+            $shipperId = (int) ($user['user_id'] ?? 0);
+
+            if (!$shipperId) {
+                return $res->json(ResponseHelper::unauthorized('Shipper ID not found in token'));
+            }
+
+            $payload = $this->parseShippingPayload($req);
+
+            try {
+                $updatedOrder = $this->performShippingTransition($orderId, $shipperId, 'arrived', $payload, [
+                    'require_location' => true
+                ]);
+                return $res->json(ResponseHelper::success($updatedOrder, 'Arrival confirmed'));
+            } catch (Exception $workflowException) {
+                return $this->shippingErrorResponse($res, $workflowException);
+            }
+        } catch (Exception $e) {
+            return $res->json(ResponseHelper::serverError('Failed to confirm arrival: ' . $e->getMessage()));
+        }
+    }
+
+    public function completeOrder(Request $req, Response $res)
+    {
+        try {
+            $orderId = (int) $req->getAttribute('id');
+            $user = $req->getAttribute('user');
+            $shipperId = (int) ($user['user_id'] ?? 0);
+
+            if (!$shipperId) {
+                return $res->json(ResponseHelper::unauthorized('Shipper ID not found in token'));
+            }
+
+            $payload = $this->parseShippingPayload($req);
+
+            try {
+                $updatedOrder = $this->performShippingTransition($orderId, $shipperId, 'completed', $payload, [
+                    'update_order_status' => 'completed'
+                ]);
+                return $res->json(ResponseHelper::success($updatedOrder, 'Order completed successfully'));
+            } catch (Exception $workflowException) {
+                return $this->shippingErrorResponse($res, $workflowException);
+            }
+        } catch (Exception $e) {
+            return $res->json(ResponseHelper::serverError('Failed to complete order: ' . $e->getMessage()));
+        }
+    }
+
+    public function rejectOrder(Request $req, Response $res)
+    {
+        try {
+            $orderId = (int) $req->getAttribute('id');
+            $user = $req->getAttribute('user');
+            $shipperId = (int) ($user['user_id'] ?? 0);
+
+            if (!$shipperId) {
+                return $res->json(ResponseHelper::unauthorized('Shipper ID not found in token'));
+            }
+
+            $payload = $this->parseShippingPayload($req);
+            if (empty($payload['note'])) {
+                return $res->json(ResponseHelper::validationError(['note' => 'Reject reason is required']));
+            }
+
+            try {
+                $updatedOrder = $this->performShippingTransition($orderId, $shipperId, 'rejected', $payload);
+                return $res->json(ResponseHelper::success($updatedOrder, 'Order rejected'));
+            } catch (Exception $workflowException) {
+                return $this->shippingErrorResponse($res, $workflowException);
+            }
+        } catch (Exception $e) {
+            return $res->json(ResponseHelper::serverError('Failed to reject order: ' . $e->getMessage()));
+        }
+    }
+    
+    /**
      * DELETE /api/orders/{id} - Hủy đơn hàng
      */
     public function destroy(Request $req, Response $res)
@@ -408,7 +810,8 @@ class OrderController extends Controller
                 return $res->json(ResponseHelper::forbidden('Order cannot be cancelled in current status'));
             }
             
-            $changedBy = $req->user['user_id'] ?? 1; // Default to admin user
+            $user = $req->getAttribute('user');
+            $changedBy = $user['user_id'] ?? 1; // Default to admin user
             $reason = $req->body('reason') ?? 'Order cancelled by admin';
             
             $result = $this->orderModel->updateStatus($id, 'cancelled', $changedBy, $reason);
@@ -506,5 +909,137 @@ class OrderController extends Controller
         } catch (Exception $e) {
             return $res->json(ResponseHelper::serverError('Failed to export orders: ' . $e->getMessage()));
         }
+    }
+
+    private function parseShippingPayload(Request $req): array
+    {
+        $data = $req->json();
+        if (!is_array($data)) {
+            $data = [];
+        }
+
+        $body = $req->body();
+        if (is_array($body)) {
+            $data = array_merge($data, $body);
+        }
+
+        return $data;
+    }
+
+    /**
+     * @return array{order: array, tracking: array}
+     * @throws Exception
+     */
+    private function getShipperOrderContext(int $orderId, int $shipperId): array
+    {
+        $order = $this->orderModel->find($orderId);
+        if (!$order) {
+            throw new Exception('Order not found', 404);
+        }
+
+        $pdo = $this->container->database()->getConnection();
+        $stmt = $pdo->prepare("SELECT shipper_id FROM shipping_tracking WHERE order_id = ?");
+        $stmt->execute([$orderId]);
+        $tracking = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        if (!$tracking || (int)$tracking['shipper_id'] !== $shipperId) {
+            throw new Exception('Order is not assigned to this shipper', 403);
+        }
+
+        return ['order' => $order, 'tracking' => $tracking];
+    }
+
+    /**
+     * @throws Exception
+     */
+    private function performShippingTransition(
+        int $orderId,
+        int $shipperId,
+        string $targetStatus,
+        array $payload,
+        array $options = []
+    ): array {
+        $this->getShipperOrderContext($orderId, $shipperId);
+
+        $photoUrl = $payload['photo_url']
+            ?? $payload['confirmation_photo']
+            ?? $payload['photo']
+            ?? null;
+
+        if (($options['require_photo'] ?? false) && !$photoUrl) {
+            throw new Exception('Photo proof is required for this action', 422);
+        }
+
+        $latValue = $payload['latitude'] ?? $payload['lat'] ?? null;
+        $lngValue = $payload['longitude'] ?? $payload['lng'] ?? null;
+
+        if (($options['require_location'] ?? false) && ($latValue === null || $lngValue === null)) {
+            throw new Exception('GPS location is required for this action', 422);
+        }
+
+        $latitude = $latValue !== null ? (float)$latValue : null;
+        $longitude = $lngValue !== null ? (float)$lngValue : null;
+
+        $metadata = $payload['metadata'] ?? [];
+        if (!is_array($metadata)) {
+            $metadata = ['raw' => $metadata];
+        }
+
+        $eventData = [
+            'note' => $payload['note'] ?? null,
+            'photo_url' => $photoUrl,
+            'latitude' => $latitude,
+            'longitude' => $longitude,
+            'metadata' => $metadata,
+        ];
+
+        $this->orderModel->updateShippingStatus(
+            $orderId,
+            $targetStatus,
+            $shipperId,
+            $eventData,
+            $options['force'] ?? false
+        );
+
+        if (($options['require_proof'] ?? false) && $photoUrl) {
+            $this->orderModel->addDeliveryProof(
+                $orderId,
+                $shipperId,
+                $targetStatus,
+                $photoUrl,
+                $options['proof_type'] ?? 'delivery_photo',
+                $latitude,
+                $longitude,
+                $metadata
+            );
+        }
+
+        if (!empty($options['update_order_status'])) {
+            $this->orderModel->updateStatus(
+                $orderId,
+                $options['update_order_status'],
+                $shipperId,
+                'Synced from shipping workflow'
+            );
+        }
+
+        return $this->orderModel->getByIdWithDetails($orderId);
+    }
+
+    private function shippingErrorResponse(Response $res, Exception $e)
+    {
+        $code = $e->getCode();
+        if ($code === 404) {
+            return $res->json(ResponseHelper::notFound($e->getMessage()));
+        }
+        if ($code === 403) {
+            return $res->json(ResponseHelper::forbidden($e->getMessage()));
+        }
+        if ($code === 422) {
+            return $res->json(ResponseHelper::validationError(['shipping_status' => $e->getMessage()]));
+        }
+
+        error_log('[Shipping Workflow] ' . $e->getMessage());
+        return $res->json(ResponseHelper::serverError('Shipping workflow failed: ' . $e->getMessage()));
     }
 }

@@ -382,9 +382,19 @@ $router->get('/api/v1/orders-test/statistics', function($req, $res) use ($contai
 // SHIPPER API ROUTES
 // ========================================
 $router->get('/api/v1/shipper/orders', [OrderController::class, 'shipperOrders'], [new AuthMiddleware($container)]);
+$router->get('/api/v1/shipper/orders/{id}', [OrderController::class, 'shipperOrderDetail'], [new AuthMiddleware($container)]);
 $router->post('/api/v1/shipper/orders/{id}/accept', [OrderController::class, 'acceptOrder'], [new AuthMiddleware($container)]);
 $router->post('/api/v1/shipper/orders/{id}/pickup', [OrderController::class, 'pickupOrder'], [new AuthMiddleware($container)]);
+$router->post('/api/v1/shipper/orders/{id}/start-delivery', [OrderController::class, 'startDelivery'], [new AuthMiddleware($container)]);
+$router->post('/api/v1/shipper/orders/{id}/arrive', [OrderController::class, 'arriveOrder'], [new AuthMiddleware($container)]);
 $router->post('/api/v1/shipper/orders/{id}/deliver', [OrderController::class, 'deliverOrder'], [new AuthMiddleware($container)]);
+$router->post('/api/v1/shipper/orders/{id}/complete', [OrderController::class, 'completeOrder'], [new AuthMiddleware($container)]);
+$router->post('/api/v1/shipper/orders/{id}/reject', [OrderController::class, 'rejectOrder'], [new AuthMiddleware($container)]);
+$router->post('/api/v1/shipper/fcm-token', [ShipperController::class, 'registerFCMToken'], [new AuthMiddleware($container)]);
+$router->get('/api/v1/shipper/notifications', [ShipperController::class, 'getNotifications'], [new AuthMiddleware($container)]);
+$router->get('/api/v1/shipper/notifications/unread-count', [ShipperController::class, 'getUnreadCount'], [new AuthMiddleware($container)]);
+$router->post('/api/v1/shipper/notifications/{id}/read', [ShipperController::class, 'markNotificationAsRead'], [new AuthMiddleware($container)]);
+$router->post('/api/v1/shipper/notifications/mark-all-read', [ShipperController::class, 'markAllNotificationsAsRead'], [new AuthMiddleware($container)]);
 
 // ========================================
 // TRACKING API ROUTES
