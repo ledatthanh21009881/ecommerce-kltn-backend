@@ -3,8 +3,10 @@ declare(strict_types=1);
 
 namespace App\Controllers;
 
-use App\Core\{Controller, Request, Response, Container};
+use App\Core\{Controller, Request, Response, Container, Database};
 use App\Domain\Orders\{Order, OrderItem};
+use App\Domain\Payments\Payment;
+use App\Services\Payment\{MockQRPaymentService, VNPayPaymentService, VietQRPaymentService, CODPaymentService, CassoPaymentService};
 use App\Support\ResponseHelper;
 use App\Core\Validator;
 use App\Services\NotificationService;
@@ -15,14 +17,26 @@ class OrderController extends Controller
 {
     private Order $orderModel;
     private OrderItem $orderItemModel;
+    private Payment $paymentModel;
     private array $shippingTransitions;
+    private array $config;
     
     public function __construct(Container $container)
     {
         parent::__construct($container);
         $this->orderModel = new Order($container->get('database'));
         $this->orderItemModel = new OrderItem($container->get('database'));
+        $this->paymentModel = new Payment($container->get('database'));
         $this->shippingTransitions = Order::SHIPPING_TRANSITIONS;
+        // Get config from container, fallback to loading from app.php if not found
+        try {
+            $config = $container->get('config');
+            $this->config = is_array($config) ? $config : [];
+        } catch (\Exception $e) {
+            // Fallback: load config from app.php
+            $configPath = __DIR__ . '/../config/app.php';
+            $this->config = file_exists($configPath) ? require $configPath : [];
+        }
     }
     
     /**
@@ -105,16 +119,158 @@ class OrderController extends Controller
     public function store(Request $req, Response $res)
     {
         try {
-            $data = $req->body();
+            $data = $req->json(); // Use json() instead of body() for JSON requests
             
             // Validate required fields
-            $validator = new Validator($data);
-            $validator->required(['customer_id', 'address_id', 'shipping_method_id', 'items'])
-                     ->integer(['customer_id', 'address_id', 'shipping_method_id'])
-                     ->array('items');
+            $validator = Validator::make($data, [
+                'customer_id' => 'required|integer',
+                'shipping_method_id' => 'required|integer',
+                'items' => 'required|array'
+            ]);
             
-            if (!$validator->validate()) {
-                return $res->json(ResponseHelper::validationError($validator->getErrors()));
+            // Handle address_id and address data
+            $addressId = isset($data['address_id']) ? (int)$data['address_id'] : null;
+            $addressJustCreated = false;
+            
+            error_log("=== OrderController: Address Processing Start ===");
+            error_log("OrderController: Initial address_id = " . var_export($addressId, true));
+            error_log("OrderController: Has address data = " . (!empty($data['address']) ? 'yes' : 'no'));
+            error_log("OrderController: customer_id = " . ($data['customer_id'] ?? 'null'));
+            
+            // If address data is provided, always create a new address (ignore address_id from request)
+            if (!empty($data['address'])) {
+                error_log("OrderController: Address data provided, will create new address");
+                $addressData = $data['address'];
+                error_log("OrderController: Attempting to create address for customer_id = " . $data['customer_id']);
+                error_log("OrderController: Address data = " . json_encode($addressData));
+                
+                $db = $this->container->database()->getConnection();
+                error_log("OrderController: Database connection obtained");
+                
+                // Create address with is_default = 0 (not default, just for this order)
+                $sql = "INSERT INTO addresses (user_id, receiver_name, phone, address_line, ward, district, province, is_default) VALUES (?, ?, ?, ?, ?, ?, ?, 0)";
+                error_log("OrderController: SQL = " . $sql);
+                
+                try {
+                    $stmt = $db->prepare($sql);
+                    $params = [
+                        $data['customer_id'],
+                        $addressData['receiver_name'] ?? '',
+                        $addressData['phone'] ?? '',
+                        $addressData['address_line'] ?? '',
+                        $addressData['ward'] ?? '',
+                        $addressData['district'] ?? '',
+                        $addressData['province'] ?? ''
+                    ];
+                    error_log("OrderController: INSERT params = " . json_encode($params));
+                    
+                    $result = $stmt->execute($params);
+                    
+                    error_log("OrderController: INSERT execute result = " . var_export($result, true));
+                    if (!$result) {
+                        $errorInfo = $stmt->errorInfo();
+                        error_log("OrderController: PDO error = " . json_encode($errorInfo));
+                        throw new \Exception("INSERT failed: " . json_encode($errorInfo));
+                    }
+                    
+                    // Always get the new address_id after successful INSERT
+                    $newAddressId = $db->lastInsertId();
+                    error_log("OrderController: lastInsertId() = " . var_export($newAddressId, true));
+                    error_log("OrderController: lastInsertId() type = " . gettype($newAddressId));
+                    
+                    if ($newAddressId && $newAddressId > 0) {
+                        $addressId = (int)$newAddressId;
+                        $addressJustCreated = true;
+                        error_log("OrderController: ✓ Created new address with ID = " . $addressId);
+                    } else {
+                        // If lastInsertId failed, try to find the address we just created
+                        error_log("OrderController: lastInsertId returned 0 or false, trying to find address");
+                        $findSql = "SELECT address_id FROM addresses WHERE user_id = ? ORDER BY address_id DESC LIMIT 1";
+                        $findStmt = $db->prepare($findSql);
+                        $findStmt->execute([$data['customer_id']]);
+                        $found = $findStmt->fetch(PDO::FETCH_ASSOC);
+                        error_log("OrderController: Latest address for user = " . var_export($found, true));
+                        
+                        if ($found && isset($found['address_id'])) {
+                            $addressId = (int)$found['address_id'];
+                            $addressJustCreated = true;
+                            error_log("OrderController: ✓ Using latest address ID = " . $addressId);
+                        } else {
+                            throw new \Exception("Failed to get address_id after INSERT");
+                        }
+                    }
+                } catch (\Exception $e) {
+                    error_log("OrderController: ✗ Error creating address: " . $e->getMessage());
+                    error_log("OrderController: Error stack trace: " . $e->getTraceAsString());
+                    // Return detailed error with debug info
+                    return $res->json([
+                        'success' => false,
+                        'message' => 'Failed to create address: ' . $e->getMessage(),
+                        'status_code' => 500,
+                        'errors' => ['address' => 'Failed to create address'],
+                        'debug' => [
+                            'exception_message' => $e->getMessage(),
+                            'customer_id' => $data['customer_id'] ?? null,
+                            'address_data' => $addressData ?? null,
+                            'initial_address_id' => isset($data['address_id']) ? (int)$data['address_id'] : null
+                        ]
+                    ], 500);
+                }
+            } else if ($addressId && $addressId > 1) {
+                // If no address data but address_id > 1 provided, verify it exists
+                error_log("OrderController: No address data, verifying existing address_id = " . $addressId);
+                $stmt = $this->container->database()->getConnection()->prepare("SELECT address_id FROM addresses WHERE address_id = ? AND user_id = ?");
+                $stmt->execute([$addressId, $data['customer_id']]);
+                $existing = $stmt->fetch(PDO::FETCH_ASSOC);
+                if (!$existing) {
+                    error_log("OrderController: ✗ address_id " . $addressId . " not found or doesn't belong to customer");
+                    $addressId = null;
+                } else {
+                    error_log("OrderController: ✓ Using existing address_id = " . $addressId);
+                }
+            }
+            
+            error_log("OrderController: Final address_id = " . var_export($addressId, true));
+            error_log("OrderController: addressJustCreated = " . var_export($addressJustCreated, true));
+            
+            // Now validate address_id exists
+            if (!$addressId || $addressId === 0) {
+                error_log("OrderController: ✗✗✗ Validation failed - address_id is invalid");
+                error_log("OrderController: address_id value = " . var_export($addressId, true));
+                error_log("OrderController: address_id type = " . gettype($addressId));
+                error_log("OrderController: address_id === 0 = " . var_export($addressId === 0, true));
+                error_log("OrderController: !addressId = " . var_export(!$addressId, true));
+                
+                // Return detailed debug info
+                $debugInfo = [
+                    'initial_address_id' => isset($data['address_id']) ? (int)$data['address_id'] : null,
+                    'final_address_id' => $addressId,
+                    'final_address_id_type' => gettype($addressId),
+                    'has_address_data' => !empty($data['address']),
+                    'address_just_created' => $addressJustCreated,
+                    'customer_id' => $data['customer_id'] ?? null,
+                    'address_data_provided' => !empty($data['address']) ? 'yes' : 'no'
+                ];
+                error_log("OrderController: Debug info = " . json_encode($debugInfo));
+                
+                return $res->json([
+                    'success' => false,
+                    'message' => 'Validation Error',
+                    'status_code' => 422,
+                    'errors' => ['address_id' => 'Address ID is required'],
+                    'debug' => $debugInfo
+                ], 422);
+            }
+            
+            error_log("OrderController: ✓✓✓ Address validation passed, address_id = " . $addressId);
+            
+            // Verify address exists (skip if we just created it)
+            if (!$addressJustCreated) {
+                $stmt = $this->container->database()->getConnection()->prepare("SELECT address_id FROM addresses WHERE address_id = ? AND user_id = ?");
+                $stmt->execute([$addressId, $data['customer_id']]);
+                if (!$stmt->fetch()) {
+                    return $res->json(ResponseHelper::validationError(['address_id' => 'Address not found or does not belong to customer']));
+                }
             }
             
             // Validate items
@@ -137,21 +293,21 @@ class OrderController extends Controller
             $subtotal = 0;
             foreach ($data['items'] as $item) {
                 // Get product variant price
-                $stmt = $this->getConnection()->prepare("SELECT list_price FROM products p JOIN product_variants pv ON p.product_id = pv.product_id WHERE pv.variant_id = ?");
+                $stmt = $this->container->database()->getConnection()->prepare("SELECT list_price FROM products p JOIN product_variants pv ON p.product_id = pv.product_id WHERE pv.variant_id = ?");
                 $stmt->execute([$item['variant_id']]);
                 $price = $stmt->fetchColumn();
                 $subtotal += $price * $item['quantity'];
             }
             
             // Get shipping fee
-            $stmt = $this->getConnection()->prepare("SELECT fee FROM shipping_methods WHERE shipping_method_id = ?");
+            $stmt = $this->container->database()->getConnection()->prepare("SELECT fee FROM shipping_methods WHERE shipping_method_id = ?");
             $stmt->execute([$data['shipping_method_id']]);
             $shippingFee = $stmt->fetchColumn() ?? 0;
             
             // Calculate discount if voucher is applied
             $discountAmount = 0;
             if (!empty($data['voucher_id'])) {
-                $stmt = $this->getConnection()->prepare("SELECT discount_amount, discount_type FROM vouchers WHERE voucher_id = ? AND status = 'active'");
+                $stmt = $this->container->database()->getConnection()->prepare("SELECT discount_amount, discount_type FROM vouchers WHERE voucher_id = ? AND status = 'active'");
                 $stmt->execute([$data['voucher_id']]);
                 $voucher = $stmt->fetch(PDO::FETCH_ASSOC);
                 
@@ -166,10 +322,10 @@ class OrderController extends Controller
             
             $totalAmount = $subtotal + $shippingFee - $discountAmount;
             
-            // Create order
+            // Create order (use newly created address_id if address was created)
             $orderData = [
                 'customer_id' => $data['customer_id'],
-                'address_id' => $data['address_id'],
+                'address_id' => $addressId, // Use the address_id (newly created or existing)
                 'shipping_method_id' => $data['shipping_method_id'],
                 'voucher_id' => $data['voucher_id'] ?? null,
                 'voucher_code_applied' => $data['voucher_code'] ?? null,
@@ -188,7 +344,7 @@ class OrderController extends Controller
             
             // Create order items
             foreach ($data['items'] as $item) {
-                $stmt = $this->getConnection()->prepare("SELECT p.list_price, p.product_name FROM products p JOIN product_variants pv ON p.product_id = pv.product_id WHERE pv.variant_id = ?");
+                $stmt = $this->container->database()->getConnection()->prepare("SELECT p.list_price, p.product_name FROM products p JOIN product_variants pv ON p.product_id = pv.product_id WHERE pv.variant_id = ?");
                 $stmt->execute([$item['variant_id']]);
                 $product = $stmt->fetch(PDO::FETCH_ASSOC);
                 
@@ -207,6 +363,30 @@ class OrderController extends Controller
             }
             
             $order = $this->orderModel->getByIdWithDetails($orderId);
+            
+            // Create payment if payment_method is provided
+            $paymentData = null;
+            if (!empty($data['payment_method'])) {
+                try {
+                    $database = $this->container->database();
+                    $service = $this->getPaymentService($data['payment_method'], $database);
+                    
+                    $paymentData = $service->createPayment([
+                        'order_id' => $orderId,
+                        'amount' => $totalAmount,
+                    ]);
+                    
+                    error_log("OrderController: Payment created - payment_id: " . ($paymentData['payment_id'] ?? 'N/A') . ", payment_url: " . ($paymentData['payment_url'] ?? 'NULL'));
+                    
+                    // Add payment_id to order response
+                    $order['payment_id'] = $paymentData['payment_id'] ?? null;
+                    $order['payment_url'] = $paymentData['payment_url'] ?? null;
+                } catch (Exception $e) {
+                    error_log("Error creating payment: " . $e->getMessage());
+                    error_log("Error stack trace: " . $e->getTraceAsString());
+                    // Don't fail order creation if payment creation fails
+                }
+            }
             
             // Gửi email hóa đơn cho khách hàng
             try {
@@ -240,20 +420,15 @@ class OrderController extends Controller
     {
         try {
             $id = (int) $req->getAttribute('id');
-            $data = $req->body();
+            $data = $req->json(); // Use json() instead of body() for JSON requests
             
             // Check if order can be edited
             if (!$this->orderModel->canEdit($id)) {
                 return $res->json(ResponseHelper::forbidden('Order cannot be edited in current status'));
             }
             
-            // Validate data
-            $validator = new Validator($data);
-            $validator->optional(['note', 'internal_note', 'estimated_delivery_at']);
-            
-            if (!$validator->validate()) {
-                return $res->json(ResponseHelper::validationError($validator->getErrors()));
-            }
+            // Validate data (note, internal_note, estimated_delivery_at are optional)
+            // No validation needed for optional fields
             
             $result = $this->orderModel->update($id, $data);
             if (!$result) {
@@ -1041,5 +1216,31 @@ class OrderController extends Controller
 
         error_log('[Shipping Workflow] ' . $e->getMessage());
         return $res->json(ResponseHelper::serverError('Shipping workflow failed: ' . $e->getMessage()));
+    }
+
+    /**
+     * Get payment service based on method
+     */
+    private function getPaymentService(string $method, Database $database): MockQRPaymentService|VNPayPaymentService|VietQRPaymentService|CODPaymentService|CassoPaymentService
+    {
+        $paymentModel = new Payment($database);  // Payment Model needs Database object
+        $db = $database->getConnection();  // PaymentService needs PDO
+
+        switch ($method) {
+            case 'mock_qr':
+                return new MockQRPaymentService($db, $paymentModel);
+            case 'vnpay':
+                $vnpayConfig = $this->config['payment']['vnpay'] ?? $this->config['vnpay'] ?? [];
+                return new VNPayPaymentService($db, $paymentModel, $vnpayConfig);
+            case 'vietqr':
+                return new VietQRPaymentService($db, $paymentModel);
+            case 'cod':
+                return new CODPaymentService($db, $paymentModel);
+            case 'casso':
+                $cassoConfig = $this->config['casso'] ?? [];
+                return new CassoPaymentService($db, $paymentModel, $cassoConfig);
+            default:
+                throw new Exception("Unknown payment method: {$method}");
+        }
     }
 }

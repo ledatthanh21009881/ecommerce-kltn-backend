@@ -1,7 +1,7 @@
 <?php
 declare(strict_types=1);
 
-use App\Controllers\{AuthController, ProductController, ProductImageController, OrderController, AdminController, CategoryController, CustomerController, ShipperController, UserController, RoleController, InventoryController, InvoiceController, VoucherController, MessageController, ShippingController, CartController, SupplierController, PurchaseReceiptController, TrackingController, NotificationController, ContentController, ContentCategoryController};
+use App\Controllers\{AuthController, ProductController, ProductImageController, OrderController, AdminController, CategoryController, CustomerController, ShipperController, UserController, RoleController, InventoryController, InvoiceController, VoucherController, MessageController, ShippingController, CartController, SupplierController, PurchaseReceiptController, TrackingController, NotificationController, ContentController, ContentCategoryController, PaymentController};
 use App\Middlewares\{AuthMiddleware, AdminMiddleware};
 
 // Debug test route
@@ -192,11 +192,13 @@ $router->patch('/api/backend/v1/shipping/{id}/toggle', [ShippingController::clas
 // ========================================
 // CART MANAGEMENT ROUTES
 // ========================================
-$router->get('/api/backend/v1/cart', [CartController::class, 'index'], [new AuthMiddleware($container)]);
-$router->post('/api/backend/v1/cart/add', [CartController::class, 'addItem'], [new AuthMiddleware($container)]);
-$router->put('/api/backend/v1/cart/update/{item_id}', [CartController::class, 'updateItem'], [new AuthMiddleware($container)]);
-$router->delete('/api/backend/v1/cart/remove/{item_id}', [CartController::class, 'removeItem'], [new AuthMiddleware($container)]);
-$router->post('/api/backend/v1/cart/sync', [CartController::class, 'syncCart'], [new AuthMiddleware($container)]);
+// Cart routes - allow guest users (no auth required, but middleware will check if token exists)
+$router->get('/api/backend/v1/cart', [CartController::class, 'index']);
+$router->post('/api/backend/v1/cart/add', [CartController::class, 'addItem']);
+$router->put('/api/backend/v1/cart/update/{item_id}', [CartController::class, 'updateItem']);
+$router->delete('/api/backend/v1/cart/remove/{item_id}', [CartController::class, 'removeItem']);
+$router->delete('/api/backend/v1/cart/clear', [CartController::class, 'clearCart']);
+$router->post('/api/backend/v1/cart/sync', [CartController::class, 'syncCart']);
 
 // ========================================
 // BACKEND MESSAGING API ROUTES (FOR ADMIN FRONTEND)
@@ -401,6 +403,17 @@ $router->post('/api/v1/shipper/notifications/mark-all-read', [ShipperController:
 // ========================================
 $router->get('/api/v1/orders/{id}/tracking', [OrderController::class, 'tracking'], [new AuthMiddleware($container)]);
 $router->post('/api/v1/orders/{id}/tracking', [OrderController::class, 'updateTracking'], [new AuthMiddleware($container)]);
+
+// ========================================
+// PAYMENT API ROUTES
+// ========================================
+$router->post('/api/v1/payments/create', [PaymentController::class, 'create'], [new AuthMiddleware($container)]);
+$router->post('/api/v1/payments/{id}/approve', [PaymentController::class, 'approve']); // Public endpoint for QR code approval
+$router->post('/api/v1/payments/vnpay-ipn', [PaymentController::class, 'handleVNPayIPN']);
+$router->post('/api/v1/payments/casso-webhook', [PaymentController::class, 'handleCassoWebhook']); // Public endpoint for Casso webhook
+$router->get('/api/v1/payments/{id}/status', [PaymentController::class, 'getStatus']); // Public endpoint for QR code
+$router->get('/api/v1/payments/{id}/debug', [PaymentController::class, 'debugPayment']); // Debug endpoint
+$router->get('/api/v1/payments/order/{order_id}', [PaymentController::class, 'getByOrderId'], [new AuthMiddleware($container)]);
 
 // ========================================
 // INVOICE API ROUTES

@@ -339,9 +339,9 @@ class Order extends Model
             $this->logStatusChange($orderId, $data['status'], $data['customer_id'], 'Đơn hàng được tạo');
             $this->logShippingEvent(
                 $orderId,
-                null,
-                $data['shipping_status'] ?? 'new_request',
-                $data['customer_id'] ?? null,
+                null,  // statusFrom
+                $data['shipping_status'] ?? 'new_request',  // statusTo
+                null,  // shipperId = null (chưa có shipper khi tạo order mới)
                 ['note' => 'Shipping workflow initialized']
             );
             
@@ -485,19 +485,59 @@ class Order extends Model
     {
         $year = date('Y');
         $month = date('m');
+        $conn = $this->getConnection();
         
+        // Use lock to prevent race conditions (already in transaction from create method)
+        // Find the maximum invoice number for this month with lock
         $sql = "
-            SELECT COUNT(*) as count 
+            SELECT invoice_number 
             FROM {$this->table} 
-            WHERE YEAR(created_at) = ? AND MONTH(created_at) = ?
+            WHERE invoice_number LIKE ? 
+            AND YEAR(created_at) = ? 
+            AND MONTH(created_at) = ?
+            ORDER BY invoice_number DESC 
+            LIMIT 1
+            FOR UPDATE
         ";
         
-        $stmt = $this->getConnection()->prepare($sql);
-        $stmt->execute([$year, $month]);
+        $pattern = "INV-{$year}-%";
+        $stmt = $conn->prepare($sql);
+        $stmt->execute([$pattern, $year, $month]);
         $result = $stmt->fetch(PDO::FETCH_ASSOC);
         
-        $count = $result['count'] + 1;
-        return "INV-{$year}-" . str_pad($count, 3, '0', STR_PAD_LEFT);
+        $count = 1;
+        if ($result && !empty($result['invoice_number'])) {
+            // Extract number from existing invoice (e.g., "INV-2025-001" -> 1)
+            $existingInvoice = $result['invoice_number'];
+            if (preg_match('/INV-\d{4}-(\d+)/', $existingInvoice, $matches)) {
+                $count = (int)$matches[1] + 1;
+            }
+        }
+        
+        // Retry logic to avoid duplicates (handle race conditions)
+        $maxRetries = 100;
+        $retry = 0;
+        while ($retry < $maxRetries) {
+            $invoiceNumber = "INV-{$year}-" . str_pad((string)$count, 3, '0', STR_PAD_LEFT);
+            
+            // Check if this invoice number already exists (with lock)
+            $checkSql = "SELECT COUNT(*) FROM {$this->table} WHERE invoice_number = ? FOR UPDATE";
+            $checkStmt = $conn->prepare($checkSql);
+            $checkStmt->execute([$invoiceNumber]);
+            $exists = $checkStmt->fetchColumn() > 0;
+            
+            if (!$exists) {
+                return $invoiceNumber;
+            }
+            
+            // If exists, try next number
+            $count++;
+            $retry++;
+        }
+        
+        // Fallback: use timestamp suffix if all retries failed
+        $timestamp = time();
+        return "INV-{$year}-" . str_pad((string)$count, 3, '0', STR_PAD_LEFT) . "-" . substr((string)$timestamp, -4);
     }
 
     private function logStatusChange(int $orderId, string $status, int $changedBy, string $reason = ''): void

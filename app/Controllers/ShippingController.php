@@ -56,7 +56,7 @@ class ShippingController extends Controller
     public function show(Request $req, Response $res)
     {
         try {
-            $id = $req->params('id');
+            $id = $req->param('id');
             $method = $this->shippingRepository->getById($id);
 
             if (!$method) {

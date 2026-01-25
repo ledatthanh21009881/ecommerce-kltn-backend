@@ -41,6 +41,26 @@ return [
         'secret_key' => $_ENV['PAYMENT_SECRET_KEY'] ?? '',
     ],
     
+    'vnpay' => [
+        'tmn_code' => $_ENV['VNPAY_TMN_CODE'] ?? '',
+        'hash_secret' => $_ENV['VNPAY_HASH_SECRET'] ?? '',
+        'url' => $_ENV['VNPAY_URL'] ?? 'https://sandbox.vnpayment.vn/paymentv2/vpcpay.html',
+        'return_url' => $_ENV['VNPAY_RETURN_URL'] ?? '',
+        'ipn_url' => $_ENV['VNPAY_IPN_URL'] ?? '',
+    ],
+    
+    'casso' => [
+        'api_key' => $_ENV['CASSO_API_KEY'] ?? '',
+        'api_url' => $_ENV['CASSO_API_URL'] ?? 'https://oauth.casso.vn/v2',
+        'webhook_secret' => $_ENV['CASSO_WEBHOOK_SECRET'] ?? '',
+        'bank_account' => [
+            'account_number' => $_ENV['CASSO_BANK_ACCOUNT'] ?? '',
+            'bank_code' => $_ENV['CASSO_BANK_CODE'] ?? '', // VCB, ACB, TCB, CTG, BID, VPB, etc.
+            'account_name' => $_ENV['CASSO_BANK_ACCOUNT_NAME'] ?? '',
+            'bank_name' => $_ENV['CASSO_BANK_NAME'] ?? '',
+        ],
+    ],
+    
     'shipping' => [
         'api_url' => $_ENV['SHIPPING_API_URL'] ?? '',
         'api_key' => $_ENV['SHIPPING_API_KEY'] ?? '',

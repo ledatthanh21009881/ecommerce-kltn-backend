@@ -13,12 +13,14 @@ class WebSocketService implements MessageComponentInterface
     protected $clients;
     protected $userConnections;
     protected $clientConversations; // Add this to store conversations for each client
+    protected $clientPayments; // Store payment rooms for each client
 
     public function __construct()
     {
         $this->clients = new \SplObjectStorage;
         $this->userConnections = [];
         $this->clientConversations = []; // Initialize conversations storage
+        $this->clientPayments = []; // Initialize payments storage
     }
 
     public function onOpen(ConnectionInterface $conn)
@@ -37,11 +39,17 @@ class WebSocketService implements MessageComponentInterface
             return;
         }
 
+        if (!isset($data['type'])) {
+            echo "Message missing type field\n";
+            return;
+        }
+
         echo "Message type: {$data['type']}\n";
 
         switch ($data['type']) {
             case 'auth':
-                $this->authenticateUser($from, $data['token']);
+                $token = $data['token'] ?? null;
+                $this->authenticateUser($from, $token);
                 break;
             case 'join_conversation':
                 echo "Joining conversation: {$data['conversation_id']}\n";
@@ -59,6 +67,20 @@ class WebSocketService implements MessageComponentInterface
                 echo "Typing stop for conversation: {$data['conversation_id']}\n";
                 $this->broadcastTyping($from, $data['conversation_id'], 'typing_stop');
                 break;
+            case 'join_payment':
+                $paymentId = $data['payment_id'] ?? null;
+                if ($paymentId) {
+                    echo "Joining payment room: {$paymentId}\n";
+                    $this->joinPaymentRoom($from, $paymentId);
+                }
+                break;
+            case 'leave_payment':
+                $paymentId = $data['payment_id'] ?? null;
+                if ($paymentId) {
+                    echo "Leaving payment room: {$paymentId}\n";
+                    $this->leavePaymentRoom($from, $paymentId);
+                }
+                break;
         }
     }
 
@@ -67,10 +89,13 @@ class WebSocketService implements MessageComponentInterface
         $this->clients->detach($conn);
         $this->removeUserConnection($conn);
         
-        // Clean up conversations for this client
+        // Clean up conversations and payments for this client
         $clientId = $conn->resourceId;
         if (isset($this->clientConversations[$clientId])) {
             unset($this->clientConversations[$clientId]);
+        }
+        if (isset($this->clientPayments[$clientId])) {
+            unset($this->clientPayments[$clientId]);
         }
         
         echo "Connection {$conn->resourceId} has disconnected\n";
@@ -217,6 +242,73 @@ class WebSocketService implements MessageComponentInterface
         if (isset($this->userConnections[$userId])) {
             $this->userConnections[$userId]->send($message);
         }
+    }
+
+    /**
+     * Join a payment room to receive real-time updates
+     */
+    protected function joinPaymentRoom($conn, $paymentId)
+    {
+        $clientId = $conn->resourceId;
+        if (!isset($this->clientPayments[$clientId])) {
+            $this->clientPayments[$clientId] = [];
+        }
+        if (!in_array($paymentId, $this->clientPayments[$clientId])) {
+            $this->clientPayments[$clientId][] = $paymentId;
+            echo "Client {$clientId} joined payment room: {$paymentId}\n";
+        }
+    }
+
+    /**
+     * Leave a payment room
+     */
+    protected function leavePaymentRoom($conn, $paymentId)
+    {
+        $clientId = $conn->resourceId;
+        if (isset($this->clientPayments[$clientId])) {
+            $this->clientPayments[$clientId] = array_filter(
+                $this->clientPayments[$clientId],
+                fn($id) => $id != $paymentId
+            );
+            echo "Client {$clientId} left payment room: {$paymentId}\n";
+        }
+    }
+
+    /**
+     * Broadcast payment status update to all clients watching this payment
+     */
+    public function broadcastPaymentUpdate($paymentId, $orderId, $status, $data = [])
+    {
+        $updateData = [
+            'type' => 'payment_update',
+            'payment_id' => $paymentId,
+            'order_id' => $orderId,
+            'status' => $status,
+            'data' => $data,
+            'timestamp' => time()
+        ];
+        
+        // Send to all clients watching this payment
+        $sentCount = 0;
+        foreach ($this->clients as $client) {
+            $clientId = $client->resourceId;
+            if (isset($this->clientPayments[$clientId]) && in_array($paymentId, $this->clientPayments[$clientId])) {
+                $client->send(json_encode($updateData));
+                $sentCount++;
+                echo "Sent payment update to client {$clientId}\n";
+            }
+        }
+        
+        echo "Broadcasted payment update to {$sentCount} clients: payment_id={$paymentId}, order_id={$orderId}, status={$status}\n";
+        
+        // Also write to file queue for Socket.IO server (if using)
+        $broadcastFile = __DIR__ . '/../../broadcast_queue.json';
+        $queue = [];
+        if (file_exists($broadcastFile)) {
+            $queue = json_decode(file_get_contents($broadcastFile), true) ?: [];
+        }
+        $queue[] = $updateData;
+        file_put_contents($broadcastFile, json_encode($queue));
     }
 
     public function startServer($port = 8080)

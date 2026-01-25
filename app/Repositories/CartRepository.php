@@ -147,6 +147,16 @@ class CartRepository
     }
 
     /**
+     * Xóa toàn bộ items trong giỏ hàng
+     */
+    public function clearCart($cartId)
+    {
+        $sql = "DELETE FROM cart_items WHERE cart_id = ?";
+        $stmt = $this->db->prepare($sql);
+        return $stmt->execute([$cartId]);
+    }
+
+    /**
      * Lấy cart item theo variant
      */
     public function getCartItemByVariant($cartId, $variantId)
@@ -237,16 +247,6 @@ class CartRepository
         $stmt = $this->db->prepare($sql);
         $stmt->execute([$cartId]);
         return $stmt->fetch(\PDO::FETCH_ASSOC);
-    }
-
-    /**
-     * Xóa tất cả items trong cart
-     */
-    public function clearCart($cartId)
-    {
-        $sql = "DELETE FROM cart_items WHERE cart_id = ?";
-        $stmt = $this->db->prepare($sql);
-        return $stmt->execute([$cartId]);
     }
 
     /**

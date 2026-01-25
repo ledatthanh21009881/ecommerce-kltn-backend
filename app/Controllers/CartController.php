@@ -5,7 +5,7 @@ namespace App\Controllers;
 use App\Core\{Controller, Request, Response, Container};
 use App\Repositories\CartRepository;
 use App\Support\JWT;
-use App\Models\ActivityLog;
+// use App\Models\ActivityLog; // Removed - class not found
 
 class CartController extends Controller
 {
@@ -198,7 +198,7 @@ class CartController extends Controller
     public function updateItem(Request $req, Response $res)
     {
         try {
-            $itemId = $req->params('item_id');
+            $itemId = $req->param('item_id');
             $input = $req->json();
             $quantity = $input['quantity'] ?? null;
 
@@ -286,7 +286,7 @@ class CartController extends Controller
     public function removeItem(Request $req, Response $res)
     {
         try {
-            $itemId = $req->params('item_id');
+            $itemId = $req->param('item_id');
 
             $token = $this->getBearerToken();
             if (!$token) {
@@ -343,6 +343,64 @@ class CartController extends Controller
             return $res->json([
                 'success' => false,
                 'message' => 'Failed to remove item from cart: ' . $e->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
+     * Xóa toàn bộ giỏ hàng
+     * DELETE /api/backend/v1/cart/clear
+     */
+    public function clearCart(Request $req, Response $res)
+    {
+        try {
+            $token = $this->getBearerToken();
+            if (!$token) {
+                return $res->json([
+                    'success' => false,
+                    'message' => 'Authentication required'
+                ], 401);
+            }
+
+            $payload = $this->jwt->decode($token);
+            if (!$payload) {
+                return $res->json([
+                    'success' => false,
+                    'message' => 'Invalid or expired token'
+                ], 401);
+            }
+
+            $customerId = $payload['user_id'];
+            $cart = $this->cartRepository->getCartByCustomerId($customerId);
+            
+            if (!$cart) {
+                return $res->json([
+                    'success' => true,
+                    'message' => 'Cart is already empty',
+                    'data' => ['items' => [], 'item_count' => 0, 'subtotal' => 0, 'total' => 0]
+                ], 200);
+            }
+
+            // Xóa tất cả items trong cart
+            $success = $this->cartRepository->clearCart($cart['cart_id']);
+            
+            if ($success) {
+                return $res->json([
+                    'success' => true,
+                    'message' => 'Cart cleared successfully',
+                    'data' => ['items' => [], 'item_count' => 0, 'subtotal' => 0, 'total' => 0]
+                ], 200);
+            } else {
+                return $res->json([
+                    'success' => false,
+                    'message' => 'Failed to clear cart'
+                ], 500);
+            }
+
+        } catch (\Exception $e) {
+            return $res->json([
+                'success' => false,
+                'message' => 'Failed to clear cart: ' . $e->getMessage()
             ], 500);
         }
     }
@@ -431,12 +489,8 @@ class CartController extends Controller
      */
     private function logActivity($userId, $action, $entityType, $entityId, $data = null)
     {
-        try {
-            $activityLog = new ActivityLog();
-            $activityLog->log($userId, $action, $entityType, $entityId, $data);
-        } catch (\Exception $e) {
-            // Log error but don't fail the main operation
-            error_log('Failed to log activity: ' . $e->getMessage());
-        }
+        // ActivityLog class not available - skip logging
+        // This is not critical for cart functionality
+        return;
     }
 }
