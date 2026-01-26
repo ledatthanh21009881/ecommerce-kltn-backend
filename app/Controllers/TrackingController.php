@@ -118,6 +118,10 @@ class TrackingController extends Controller
                     sl.lng as current_lng,
                     sl.captured_at as location_updated_at,
                     
+                    -- Destination coordinates
+                    a.lat as destination_lat,
+                    a.lng as destination_lng,
+                    
                     -- Tracking info
                     (SELECT COUNT(*) FROM order_tracking_events ote WHERE ote.order_id = o.order_id) as event_count,
                     (SELECT ote.status FROM order_tracking_events ote WHERE ote.order_id = o.order_id ORDER BY ote.created_at DESC LIMIT 1) as last_status,
@@ -128,6 +132,7 @@ class TrackingController extends Controller
                 LEFT JOIN shippers s ON st.shipper_id = s.user_id
                 LEFT JOIN users u ON s.user_id = u.user_id
                 LEFT JOIN customers c ON o.customer_id = c.user_id
+                LEFT JOIN addresses a ON o.address_id = a.address_id
                 LEFT JOIN shipper_locations sl
                     ON sl.shipper_id = st.shipper_id
                     AND sl.order_id = o.order_id
@@ -247,13 +252,18 @@ class TrackingController extends Controller
                     sl.lng as current_lng,
                     sl.speed,
                     sl.heading,
-                    sl.captured_at as location_updated_at
+                    sl.captured_at as location_updated_at,
+                    
+                    -- Destination coordinates
+                    a.lat as destination_lat,
+                    a.lng as destination_lng
                     
                 FROM orders o
                 LEFT JOIN shipping_tracking st ON o.order_id = st.order_id
                 LEFT JOIN shippers s ON st.shipper_id = s.user_id
                 LEFT JOIN users u ON s.user_id = u.user_id
                 LEFT JOIN customers c ON o.customer_id = c.user_id
+                LEFT JOIN addresses a ON o.address_id = a.address_id
                 LEFT JOIN shipper_locations sl
                     ON sl.shipper_id = st.shipper_id
                     AND sl.order_id = o.order_id
@@ -333,7 +343,9 @@ class TrackingController extends Controller
                     'name' => $order['customer_name'],
                     'phone' => $order['customer_phone'],
                     'email' => $order['customer_email'],
-                    'address' => $order['customer_address']
+                    'address' => $order['customer_address'],
+                    'destination_lat' => $order['destination_lat'] ? (float)$order['destination_lat'] : null,
+                    'destination_lng' => $order['destination_lng'] ? (float)$order['destination_lng'] : null
                 ],
                 'shipper' => [
                     'user_id' => $order['shipper_id'] ? (int)$order['shipper_id'] : null,
