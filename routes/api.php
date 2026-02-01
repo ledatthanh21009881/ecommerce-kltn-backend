@@ -1,7 +1,7 @@
 <?php
 declare(strict_types=1);
 
-use App\Controllers\{AuthController, ProductController, ProductImageController, OrderController, AdminController, CategoryController, CustomerController, ShipperController, UserController, RoleController, InventoryController, InvoiceController, VoucherController, MessageController, ShippingController, CartController, SupplierController, PurchaseReceiptController, TrackingController, NotificationController, ContentController, ContentCategoryController, PaymentController};
+use App\Controllers\{AuthController, ProductController, ProductImageController, OrderController, AdminController, CategoryController, CustomerController, ShipperController, UserController, RoleController, InventoryController, InvoiceController, VoucherController, MessageController, ShippingController, CartController, SupplierController, PurchaseReceiptController, TrackingController, NotificationController, ContentController, ContentCategoryController, PaymentController, CollectionController, UserOrderController};
 use App\Middlewares\{AuthMiddleware, AdminMiddleware};
 
 // Debug test route
@@ -120,6 +120,13 @@ $router->get('/api/orders', [OrderController::class, 'index'], [new AuthMiddlewa
 $router->get('/api/orders/statistics', [OrderController::class, 'statistics'], [new AuthMiddleware($container)]);
 $router->get('/api/orders/{id}', [OrderController::class, 'show'], [new AuthMiddleware($container)]);
 
+// ========================================
+// USER ORDER ROUTES (customer-scoped)
+// ========================================
+$router->get('/api/user/orders', [UserOrderController::class, 'index'], [new AuthMiddleware($container)]);
+$router->get('/api/user/orders/{id}', [UserOrderController::class, 'show'], [new AuthMiddleware($container)]);
+$router->get('/api/user/orders/{id}/tracking', [UserOrderController::class, 'tracking'], [new AuthMiddleware($container)]);
+
 // TEST ROUTES (NO AUTHENTICATION REQUIRED)
 // ========================================
 $router->get('/api/test/orders/{id}', [OrderController::class, 'show']);
@@ -188,6 +195,13 @@ $router->post('/api/backend/v1/shipping', [ShippingController::class, 'store'], 
 $router->put('/api/backend/v1/shipping/{id}', [ShippingController::class, 'update'], [new AuthMiddleware($container)]);
 $router->delete('/api/backend/v1/shipping/{id}', [ShippingController::class, 'destroy'], [new AuthMiddleware($container)]);
 $router->patch('/api/backend/v1/shipping/{id}/toggle', [ShippingController::class, 'toggleStatus'], [new AuthMiddleware($container)]);
+
+// ========================================
+// COLLECTIONS ROUTES (public, no auth)
+// ========================================
+$router->get('/api/collections', [CollectionController::class, 'index']);
+$router->get('/api/collections/{collection_id}/images', [CollectionController::class, 'getImages']);
+$router->get('/api/collections/{slug}', [CollectionController::class, 'showBySlug']);
 
 // ========================================
 // CART MANAGEMENT ROUTES
