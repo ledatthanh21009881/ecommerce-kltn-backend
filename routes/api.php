@@ -1,7 +1,7 @@
 <?php
 declare(strict_types=1);
 
-use App\Controllers\{AuthController, ProductController, ProductImageController, OrderController, AdminController, CategoryController, CustomerController, ShipperController, UserController, RoleController, InventoryController, InvoiceController, VoucherController, MessageController, ShippingController, CartController, SupplierController, PurchaseReceiptController, TrackingController, NotificationController, ContentController, ContentCategoryController, PaymentController, CollectionController, UserOrderController};
+use App\Controllers\{AddressController, AuthController, ProductController, ProductImageController, OrderController, AdminController, CategoryController, CustomerController, ShipperController, UserController, RoleController, InventoryController, InvoiceController, VoucherController, MessageController, ShippingController, CartController, SupplierController, PurchaseReceiptController, TrackingController, NotificationController, ContentController, ContentCategoryController, PaymentController, CollectionController, UserOrderController};
 use App\Middlewares\{AuthMiddleware, AdminMiddleware};
 
 // Debug test route
@@ -126,6 +126,13 @@ $router->get('/api/orders/{id}', [OrderController::class, 'show'], [new AuthMidd
 $router->get('/api/user/orders', [UserOrderController::class, 'index'], [new AuthMiddleware($container)]);
 $router->get('/api/user/orders/{id}', [UserOrderController::class, 'show'], [new AuthMiddleware($container)]);
 $router->get('/api/user/orders/{id}/tracking', [UserOrderController::class, 'tracking'], [new AuthMiddleware($container)]);
+
+// User addresses (customer-scoped CRUD + default)
+$router->get('/api/v1/user/addresses', [AddressController::class, 'index'], [new AuthMiddleware($container)]);
+$router->post('/api/v1/user/addresses', [AddressController::class, 'store'], [new AuthMiddleware($container)]);
+$router->put('/api/v1/user/addresses/{id}', [AddressController::class, 'update'], [new AuthMiddleware($container)]);
+$router->delete('/api/v1/user/addresses/{id}', [AddressController::class, 'destroy'], [new AuthMiddleware($container)]);
+$router->put('/api/v1/user/addresses/{id}/default', [AddressController::class, 'setDefault'], [new AuthMiddleware($container)]);
 
 // TEST ROUTES (NO AUTHENTICATION REQUIRED)
 // ========================================

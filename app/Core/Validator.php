@@ -104,6 +104,15 @@ class Validator
                 }
                 break;
                 
+            case 'phone_vn':
+                if (!empty($value)) {
+                    $normalized = preg_replace('/\D/', '', $value);
+                    if (!preg_match('/^0[0-9]{9}$/', $normalized)) {
+                        $this->addError($field, "Số điện thoại phải bắt đầu bằng 0 và có đúng 10 chữ số");
+                    }
+                }
+                break;
+                
             case 'confirmed':
                 $confirmField = $field . '_confirmation';
                 if (($this->data[$confirmField] ?? null) !== $value) {

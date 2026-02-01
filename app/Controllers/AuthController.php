@@ -266,7 +266,7 @@ class AuthController extends Controller
             'first_name' => 'required',
             'last_name' => 'required',
             'email' => 'required|email',
-            'phone' => 'required'
+            'phone' => 'required|phone_vn'
         ]);
         
         if (!$validator->validate()) {
@@ -275,6 +275,7 @@ class AuthController extends Controller
         
         try {
             $pdo = $this->container->database()->getConnection();
+            $phoneNormalized = preg_replace('/\D/', '', $data['phone']);
             
             // Check if account name exists
             if ($this->accountModel->findByAccountName($data['account_name'])) {
@@ -302,7 +303,7 @@ class AuthController extends Controller
                 'first_name' => $data['first_name'],
                 'last_name' => $data['last_name'],
                 'email' => $data['email'],
-                'phone' => $data['phone'],
+                'phone' => $phoneNormalized,
                 'gender' => $data['gender'] ?? 'other',
                 'birthdate' => $data['birthdate'] ?? null
             ]);
@@ -405,7 +406,7 @@ class AuthController extends Controller
             'first_name' => 'required',
             'last_name' => 'required',
             'email' => 'required|email',
-            'phone' => 'required'
+            'phone' => 'required|phone_vn'
         ]);
         
         if (!$validator->validate()) {
@@ -413,11 +414,12 @@ class AuthController extends Controller
         }
         
         try {
+            $phoneNormalized = preg_replace('/\D/', '', $data['phone']);
             $this->userModel->update($user['user_id'], [
                 'first_name' => $data['first_name'],
                 'last_name' => $data['last_name'],
                 'email' => $data['email'],
-                'phone' => $data['phone'],
+                'phone' => $phoneNormalized,
                 'gender' => $data['gender'] ?? null,
                 'birthdate' => $data['birthdate'] ?? null,
                 'avatar_url' => $data['avatar_url'] ?? null

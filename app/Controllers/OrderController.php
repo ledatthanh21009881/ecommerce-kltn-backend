@@ -229,6 +229,16 @@ class OrderController extends Controller
                     error_log("OrderController: ✓ Using existing address_id = " . $addressId);
                 }
             }
+            // If still no address, use default address for customer
+            if ((!$addressId || $addressId === 0) && empty($data['address'])) {
+                $stmt = $this->container->database()->getConnection()->prepare("SELECT address_id FROM addresses WHERE user_id = ? AND is_default = 1 LIMIT 1");
+                $stmt->execute([$data['customer_id']]);
+                $defaultRow = $stmt->fetch(PDO::FETCH_ASSOC);
+                if ($defaultRow && !empty($defaultRow['address_id'])) {
+                    $addressId = (int) $defaultRow['address_id'];
+                    error_log("OrderController: ✓ Using default address_id = " . $addressId);
+                }
+            }
             
             error_log("OrderController: Final address_id = " . var_export($addressId, true));
             error_log("OrderController: addressJustCreated = " . var_export($addressJustCreated, true));
@@ -257,7 +267,7 @@ class OrderController extends Controller
                     'success' => false,
                     'message' => 'Validation Error',
                     'status_code' => 422,
-                    'errors' => ['address_id' => 'Address ID is required'],
+                    'errors' => ['address_id' => 'Vui lòng chọn địa chỉ giao hàng hoặc thêm địa chỉ mặc định trong Tài khoản'],
                     'debug' => $debugInfo
                 ], 422);
             }
