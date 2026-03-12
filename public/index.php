@@ -26,6 +26,11 @@ error_log("INDEX.PHP: {$requestMethod} {$requestPath}");
 
 require __DIR__.'/../vendor/autoload.php';
 
+// Load .env before Container so config (app.php) can read $_ENV (e.g. PAYOS_*)
+if (file_exists(__DIR__.'/../.env')) {
+    \Dotenv\Dotenv::createImmutable(__DIR__.'/../')->safeLoad();
+}
+
 use App\Core\Router;
 use App\Core\Request;
 use App\Core\Response;

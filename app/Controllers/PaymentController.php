@@ -6,7 +6,7 @@ namespace App\Controllers;
 
 use App\Core\{Controller, Request, Response, Container};
 use App\Domain\Payments\Payment;
-use App\Services\Payment\{MockQRPaymentService, VNPayPaymentService, VietQRPaymentService, CODPaymentService, CassoPaymentService};
+use App\Services\Payment\{MockQRPaymentService, VNPayPaymentService, VietQRPaymentService, CODPaymentService, PayOSPaymentService};
 use App\Support\ResponseHelper;
 use App\Core\Validator;
 use Exception;
@@ -208,6 +208,29 @@ class PaymentController extends Controller
             $paymentId = (int) $req->getAttribute('id');
 
             $payment = $this->paymentModel->getByPaymentId($paymentId);
+            // #region agent log
+            try {
+                $logPath = __DIR__ . '/../../.cursor/debug-e7f3bb.log';
+                @mkdir(dirname($logPath), 0777, true);
+                @file_put_contents($logPath, json_encode([
+                    'sessionId' => 'e7f3bb',
+                    'runId' => 'pre-fix',
+                    'hypothesisId' => 'H5',
+                    'location' => 'ecommerce/app/Controllers/PaymentController.php:getStatus',
+                    'message' => 'Fetched payment record for status',
+                    'data' => [
+                        'paymentId' => $paymentId,
+                        'payment_exists' => (bool)$payment,
+                        'method' => is_array($payment) ? ($payment['method'] ?? null) : null,
+                        'status' => is_array($payment) ? ($payment['status'] ?? null) : null,
+                        'order_id' => is_array($payment) ? ($payment['order_id'] ?? null) : null,
+                    ],
+                    'timestamp' => round(microtime(true) * 1000),
+                ]) . "\n", FILE_APPEND);
+            } catch (\Throwable $e) {
+                // ignore logging errors
+            }
+            // #endregion
             if (!$payment) {
                 return $res->json(ResponseHelper::notFound('Payment not found'));
             }
@@ -330,109 +353,41 @@ class PaymentController extends Controller
     }
 
     /**
-     * POST /api/v1/payments/casso-webhook - Handle Casso webhook callback
+     * POST /api/v1/payments/payos-webhook - Handle PayOS webhook callback
      */
-    public function handleCassoWebhook(Request $req, Response $res)
+    public function handlePayOSWebhook(Request $req, Response $res)
     {
-        // Start timing to ensure response within 5 seconds
         $startTime = microtime(true);
-        
         try {
-            // Get raw request body for signature verification (Webhook V2)
             $rawBody = file_get_contents('php://input');
-            
-            // Parse JSON data
             $data = json_decode($rawBody, true);
             if (empty($data)) {
-                error_log('Casso webhook: Invalid or empty request body');
-                return $res->text("OK"); // Return OK even if invalid to prevent retries
+                error_log('PayOS webhook: Invalid or empty request body');
+                return $res->json(['success' => true], 200);
             }
-            
-            // Get headers from $_SERVER
-            $headers = $this->getAllHeaders();
-            
-            // Get Casso service
             $db = $this->container->database()->getConnection();
-            $cassoConfig = $this->config['casso'] ?? [];
-            $cassoService = new CassoPaymentService($db, $this->paymentModel, $cassoConfig);
+            $payosConfig = $this->config['payos'] ?? [];
+            $payosService = new PayOSPaymentService($db, $this->paymentModel, $payosConfig);
 
-            // Check error code
-            $error = $data['error'] ?? -1;
-            if ($error != 0) {
-                // Return OK even if error code != 0 (as per Casso requirement)
-                error_log("Casso webhook: Error code {$error}");
-                return $res->text("OK");
+            if (empty($data['success']) || ($data['code'] ?? '') !== '00') {
+                error_log('PayOS webhook: Unsuccessful or non-00 code');
+                return $res->json(['success' => true], 200);
             }
-
-            // Verify webhook (Webhook V2 or Webhook v1)
-            $isWebhookV2 = isset($headers['X-Casso-Signature']) || isset($headers['x-casso-signature']);
-            
-            if ($isWebhookV2) {
-                // Webhook V2: Verify signature using raw body
-                $signature = $headers['X-Casso-Signature'] ?? $headers['x-casso-signature'] ?? '';
-                
-                // Extract timestamp from signature
-                $timestamp = time();
-                if (preg_match('/t=(\d+)/', $signature, $matches)) {
-                    $timestamp = (int)$matches[1];
-                }
-                
-                // Verify signature with raw body
-                if (!$cassoService->verifyWebhookSignature($signature, $rawBody, $timestamp)) {
-                    error_log("Casso webhook: Invalid signature");
-                    return $res->json([
-                        'success' => false,
-                        'message' => 'Invalid webhook signature'
-                    ], 401);
-                }
-                
-                // Process single transaction (Webhook V2 - data is object)
-                $transaction = $data['data'] ?? [];
-                if (!empty($transaction) && is_array($transaction)) {
-                    $this->processCassoTransaction($transaction, $db);
-                }
-            } else {
-                // Webhook v1: Verify secure token
-                $secureToken = $headers['secure-token'] ?? $headers['Secure-Token'] ?? '';
-                if (!$cassoService->verifySecureToken($secureToken)) {
-                    error_log("Casso webhook: Invalid secure token");
-                    return $res->json([
-                        'success' => false,
-                        'message' => 'Invalid secure token'
-                    ], 401);
-                }
-                
-                // Process transactions (Webhook v1 - data is array of transactions)
-                $transactions = $data['data'] ?? [];
-                if (is_array($transactions)) {
-                    // Check if it's a single transaction object or array of transactions
-                    if (isset($transactions['id']) || isset($transactions['tid'])) {
-                        // Single transaction object
-                        $this->processCassoTransaction($transactions, $db);
-                    } else {
-                        // Array of transactions
-                        foreach ($transactions as $transaction) {
-                            if (is_array($transaction)) {
-                                $this->processCassoTransaction($transaction, $db);
-                            }
-                        }
-                    }
-                }
+            $signature = $data['signature'] ?? '';
+            if (!$payosService->verifyWebhookSignature($data, $signature)) {
+                error_log('PayOS webhook: Invalid signature');
+                return $res->json(['success' => false, 'message' => 'Invalid signature'], 401);
             }
-
+            $payload = $data['data'] ?? [];
+            if (!empty($payload) && is_array($payload)) {
+                $this->processPayOSTransaction($payload, $db);
+            }
             $processingTime = microtime(true) - $startTime;
-            error_log("Casso webhook processed in " . round($processingTime * 1000, 2) . "ms");
-
-            // Return "OK" as per Casso example (within 5 seconds requirement)
-            return $res->text("OK");
-
+            error_log("PayOS webhook processed in " . round($processingTime * 1000, 2) . "ms");
+            return $res->json(['success' => true], 200);
         } catch (Exception $e) {
-            $processingTime = microtime(true) - $startTime;
-            error_log('Casso webhook error after ' . round($processingTime * 1000, 2) . 'ms: ' . $e->getMessage());
-            error_log('Casso webhook stack trace: ' . $e->getTraceAsString());
-            
-            // Return OK even on error to prevent infinite retries
-            return $res->text("OK");
+            error_log('PayOS webhook error: ' . $e->getMessage());
+            return $res->json(['success' => true], 200);
         }
     }
 
@@ -463,135 +418,72 @@ class PaymentController extends Controller
     }
 
     /**
-     * Process a single Casso transaction with idempotency check
+     * Process a single PayOS webhook transaction with idempotency check
+     * PayOS data: orderCode, amount, description, reference, accountNumber, ...
      */
-    private function processCassoTransaction(array $transaction, $db): void
+    private function processPayOSTransaction(array $data, $db): void
     {
-        error_log("=== processCassoTransaction START ===");
-        error_log("Transaction data: " . json_encode($transaction));
-        
-        // Get transaction ID (unique identifier from Casso - required for idempotency)
-        $transactionId = $transaction['id'] ?? $transaction['tid'] ?? null;
-        // Convert to string if not null (updateStatus requires ?string)
-        $transactionId = $transactionId !== null ? (string)$transactionId : null;
-        error_log("Transaction ID: " . ($transactionId ?? 'NULL'));
-        
-        if (empty($transactionId)) {
-            error_log('Casso: Transaction ID is missing - cannot process without unique identifier');
+        $orderId = (int)($data['orderCode'] ?? 0);
+        $amount = (float)($data['amount'] ?? 0);
+        $description = $data['description'] ?? '';
+        $transactionId = $data['reference'] ?? $data['paymentLinkId'] ?? ('payos-' . $orderId . '-' . ($data['transactionDateTime'] ?? ''));
+        $transactionId = (string) $transactionId;
+
+        if (!$orderId) {
+            error_log('PayOS: Missing orderCode in webhook data');
             return;
         }
-        
-        // Check if this transaction has already been processed (idempotency - prevent replay attack)
         try {
-            $stmt = $db->prepare("SELECT id, payment_id, order_id FROM casso_transactions WHERE transaction_id = ?");
+            $stmt = $db->prepare("SELECT id, payment_id, order_id FROM payos_transactions WHERE transaction_id = ?");
             $stmt->execute([$transactionId]);
             $existing = $stmt->fetch(PDO::FETCH_ASSOC);
-            error_log("Idempotency check result: " . ($existing ? "FOUND" : "NOT FOUND"));
         } catch (\Exception $e) {
-            error_log("Casso: Error checking casso_transactions table: " . $e->getMessage());
-            error_log("Casso: Table might not exist. Skipping idempotency check.");
             $existing = false;
         }
-        
         if ($existing) {
-            error_log("Casso: Transaction {$transactionId} already processed (id: {$existing['id']}, payment_id: {$existing['payment_id']}, order_id: {$existing['order_id']}) - skipping (idempotency check)");
-            return; // Already processed, skip to prevent replay attack
-        }
-        
-        // Extract amount and description
-        $amount = (float)($transaction['amount'] ?? 0);
-        $description = $transaction['description'] ?? '';
-        
-        // Extract order_id from description
-        // Try patterns: "ORDER_123", "DH123", "123", etc.
-        $orderId = null;
-        if (preg_match('/ORDER[_\s]*(\d+)/i', $description, $matches)) {
-            $orderId = (int)$matches[1];
-        } elseif (preg_match('/DH[_\s]*(\d+)/i', $description, $matches)) {
-            $orderId = (int)$matches[1];
-        } elseif (preg_match('/(\d{4,})/', $description, $matches)) {
-            // Try to match with order_id if it's a 4+ digit number
-            $orderId = (int)$matches[1];
-        }
-        
-        if (!$orderId) {
-            error_log('Casso: Could not extract order_id from description: ' . $description . ', transaction_id: ' . $transactionId);
+            error_log("PayOS: Transaction {$transactionId} already processed");
             return;
         }
-        
-        // Find pending payment for this order
         $payment = $this->paymentModel->getByOrderId($orderId);
-        
         if (!$payment) {
-            error_log('Casso: Payment not found for order_id: ' . $orderId . ', transaction_id: ' . $transactionId);
+            error_log('PayOS: Payment not found for order_id: ' . $orderId);
             return;
         }
-        
-        if ($payment['status'] !== 'pending' || $payment['method'] !== 'casso') {
-            error_log('Casso: Payment is not pending or not casso method. Order: ' . $orderId . ', Status: ' . ($payment['status'] ?? 'N/A') . ', Method: ' . ($payment['method'] ?? 'N/A'));
+        if ($payment['status'] !== 'pending' || $payment['method'] !== 'payos') {
             return;
         }
-        
-        // Check if amount matches (allow 1000 VND difference for bank fees)
         $expectedAmount = (float)$payment['paid_amount'];
-        $difference = abs($amount - $expectedAmount);
-        
-        if ($difference > 1000) {
-            error_log("Casso: Amount mismatch. Expected: {$expectedAmount}, Received: {$amount}, Order: {$orderId}, Transaction: {$transactionId}");
+        if (abs($amount - $expectedAmount) > 1000) {
+            error_log("PayOS: Amount mismatch. Expected: {$expectedAmount}, Received: {$amount}");
             return;
         }
-        
-        // Start database transaction to ensure atomicity
         $db->beginTransaction();
-        
         try {
-            // Mark transaction as processed FIRST (before updating payment) - prevents race conditions
             $stmt = $db->prepare("
-                INSERT INTO casso_transactions (transaction_id, payment_id, order_id, amount, description, processed_at)
+                INSERT INTO payos_transactions (transaction_id, payment_id, order_id, amount, description, processed_at)
                 VALUES (?, ?, ?, ?, ?, NOW())
             ");
-            $stmt->execute([
-                $transactionId,
-                $payment['payment_id'],
-                $orderId,
-                $amount,
-                $description
-            ]);
-            
-            // Update payment status
-            $this->paymentModel->updateStatus(
-                $payment['payment_id'], 
-                'confirmed', 
-                $transactionId
-            );
-            
-            // Store callback payload
+            $stmt->execute([$transactionId, $payment['payment_id'], $orderId, $amount, $description]);
+
+            $this->paymentModel->updateStatus($payment['payment_id'], 'confirmed', $transactionId);
+
             $stmt = $db->prepare("
-                UPDATE payments 
-                SET callback_payload = ?, 
-                    bank_code = ?, 
-                    paid_amount = ? 
-                WHERE payment_id = ?
+                UPDATE payments SET callback_payload = ?, bank_code = ?, paid_amount = ? WHERE payment_id = ?
             ");
             $stmt->execute([
-                json_encode($transaction),
-                $transaction['bankAbbreviation'] ?? $transaction['bankName'] ?? null,
+                json_encode($data),
+                $data['counterAccountBankName'] ?? $data['accountNumber'] ?? null,
                 $amount,
                 $payment['payment_id']
             ]);
 
-            // Update order status
             $stmt = $db->prepare("
-                UPDATE orders 
-                SET status = 'processing' 
-                WHERE order_id = ? AND status = 'pending'
+                UPDATE orders SET status = 'processing' WHERE order_id = ? AND status = 'pending'
             ");
             $stmt->execute([$orderId]);
-            
-            // Commit all changes
+
             $db->commit();
-            
-            error_log("Casso: Payment confirmed successfully - order_id: {$orderId}, payment_id: {$payment['payment_id']}, transaction_id: {$transactionId}, amount: {$amount}");
+            error_log("PayOS: Payment confirmed - order_id: {$orderId}, payment_id: {$payment['payment_id']}, reference: {$transactionId}");
             
             // Broadcast payment update via WebSocket
             try {
@@ -603,20 +495,17 @@ class PaymentController extends Controller
                     [
                         'transaction_id' => $transactionId,
                         'amount' => $amount,
-                        'method' => 'casso'
+                        'method' => 'payos'
                     ]
                 );
-                error_log("Casso: Payment update broadcasted via WebSocket");
+                error_log("PayOS: Payment update broadcasted via WebSocket");
             } catch (\Exception $e) {
-                error_log("Casso: Failed to broadcast payment update: " . $e->getMessage());
-                // Don't fail payment processing if broadcast fails
+                error_log("PayOS: Failed to broadcast payment update: " . $e->getMessage());
             }
         } catch (\Exception $e) {
-            // Rollback on error
             $db->rollBack();
-            error_log("Casso: Error processing transaction {$transactionId}: " . $e->getMessage());
-            error_log("Casso: Stack trace: " . $e->getTraceAsString());
-            throw $e; // Re-throw to be caught by handleCassoWebhook
+            error_log("PayOS: Error processing transaction {$transactionId}: " . $e->getMessage());
+            throw $e;
         }
     }
 
@@ -640,25 +529,25 @@ class PaymentController extends Controller
             $paymentByOrder = $this->paymentModel->getByOrderId($payment['order_id']);
         }
         
-        // Check casso_transactions
-        $stmt = $db->prepare("SELECT * FROM casso_transactions ORDER BY id DESC LIMIT 10");
+        // Check payos_transactions
+        $stmt = $db->prepare("SELECT * FROM payos_transactions ORDER BY id DESC LIMIT 10");
         $stmt->execute();
-        $cassoTransactions = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        $payosTransactions = $stmt->fetchAll(PDO::FETCH_ASSOC);
         
         return $res->json([
             'payment_raw' => $payment,
             'payment_by_order' => $paymentByOrder,
-            'casso_transactions' => $cassoTransactions
+            'payos_transactions' => $payosTransactions
         ]);
     }
 
     /**
      * Get payment service based on method
      */
-    private function getPaymentService(string $method, $db): MockQRPaymentService|VNPayPaymentService|VietQRPaymentService|CODPaymentService|CassoPaymentService
+    private function getPaymentService(string $method, $db): MockQRPaymentService|VNPayPaymentService|VietQRPaymentService|CODPaymentService|PayOSPaymentService
     {
-        $paymentModel = new Payment($this->container->get('database'));  // Payment Model needs Database object
-        $pdo = $db;  // PaymentService needs PDO
+        $paymentModel = new Payment($this->container->get('database'));
+        $pdo = $db;
 
         switch ($method) {
             case 'mock_qr':
@@ -670,9 +559,9 @@ class PaymentController extends Controller
                 return new VietQRPaymentService($pdo, $paymentModel);
             case 'cod':
                 return new CODPaymentService($pdo, $paymentModel);
-            case 'casso':
-                $cassoConfig = $this->config['casso'] ?? [];
-                return new CassoPaymentService($pdo, $paymentModel, $cassoConfig);
+            case 'payos':
+                $payosConfig = $this->config['payos'] ?? [];
+                return new PayOSPaymentService($pdo, $paymentModel, $payosConfig);
             default:
                 throw new Exception("Unknown payment method: {$method}");
         }

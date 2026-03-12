@@ -431,7 +431,7 @@ $router->post('/api/v1/orders/{id}/tracking', [OrderController::class, 'updateTr
 $router->post('/api/v1/payments/create', [PaymentController::class, 'create'], [new AuthMiddleware($container)]);
 $router->post('/api/v1/payments/{id}/approve', [PaymentController::class, 'approve']); // Public endpoint for QR code approval
 $router->post('/api/v1/payments/vnpay-ipn', [PaymentController::class, 'handleVNPayIPN']);
-$router->post('/api/v1/payments/casso-webhook', [PaymentController::class, 'handleCassoWebhook']); // Public endpoint for Casso webhook
+$router->post('/api/v1/payments/payos-webhook', [PaymentController::class, 'handlePayOSWebhook']); // Public endpoint for PayOS webhook
 $router->get('/api/v1/payments/{id}/status', [PaymentController::class, 'getStatus']); // Public endpoint for QR code
 $router->get('/api/v1/payments/{id}/debug', [PaymentController::class, 'debugPayment']); // Debug endpoint
 $router->get('/api/v1/payments/order/{order_id}', [PaymentController::class, 'getByOrderId'], [new AuthMiddleware($container)]);

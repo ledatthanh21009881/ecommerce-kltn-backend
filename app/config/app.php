@@ -49,16 +49,12 @@ return [
         'ipn_url' => $_ENV['VNPAY_IPN_URL'] ?? '',
     ],
     
-    'casso' => [
-        'api_key' => $_ENV['CASSO_API_KEY'] ?? '',
-        'api_url' => $_ENV['CASSO_API_URL'] ?? 'https://oauth.casso.vn/v2',
-        'webhook_secret' => $_ENV['CASSO_WEBHOOK_SECRET'] ?? '',
-        'bank_account' => [
-            'account_number' => $_ENV['CASSO_BANK_ACCOUNT'] ?? '',
-            'bank_code' => $_ENV['CASSO_BANK_CODE'] ?? '', // VCB, ACB, TCB, CTG, BID, VPB, etc.
-            'account_name' => $_ENV['CASSO_BANK_ACCOUNT_NAME'] ?? '',
-            'bank_name' => $_ENV['CASSO_BANK_NAME'] ?? '',
-        ],
+    'payos' => [
+        'client_id' => $_ENV['PAYOS_CLIENT_ID'] ?? '',
+        'api_key' => $_ENV['PAYOS_API_KEY'] ?? '',
+        'checksum_key' => $_ENV['PAYOS_CHECKSUM_KEY'] ?? '',
+        'api_url' => $_ENV['PAYOS_API_URL'] ?? 'https://api-merchant.payos.vn',
+        'base_url' => $_ENV['PAYOS_BASE_URL'] ?? $_ENV['APP_URL'] ?? 'http://localhost:3000',
     ],
     
     'shipping' => [

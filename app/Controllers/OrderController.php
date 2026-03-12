@@ -6,7 +6,7 @@ namespace App\Controllers;
 use App\Core\{Controller, Request, Response, Container, Database};
 use App\Domain\Orders\{Order, OrderItem};
 use App\Domain\Payments\Payment;
-use App\Services\Payment\{MockQRPaymentService, VNPayPaymentService, VietQRPaymentService, CODPaymentService, CassoPaymentService};
+use App\Services\Payment\{MockQRPaymentService, VNPayPaymentService, VietQRPaymentService, CODPaymentService, PayOSPaymentService};
 use App\Support\ResponseHelper;
 use App\Core\Validator;
 use App\Services\NotificationService;
@@ -1231,7 +1231,7 @@ class OrderController extends Controller
     /**
      * Get payment service based on method
      */
-    private function getPaymentService(string $method, Database $database): MockQRPaymentService|VNPayPaymentService|VietQRPaymentService|CODPaymentService|CassoPaymentService
+    private function getPaymentService(string $method, Database $database): MockQRPaymentService|VNPayPaymentService|VietQRPaymentService|CODPaymentService|PayOSPaymentService
     {
         $paymentModel = new Payment($database);  // Payment Model needs Database object
         $db = $database->getConnection();  // PaymentService needs PDO
@@ -1246,9 +1246,17 @@ class OrderController extends Controller
                 return new VietQRPaymentService($db, $paymentModel);
             case 'cod':
                 return new CODPaymentService($db, $paymentModel);
-            case 'casso':
-                $cassoConfig = $this->config['casso'] ?? [];
-                return new CassoPaymentService($db, $paymentModel, $cassoConfig);
+            case 'payos':
+                $payosConfig = $this->config['payos'] ?? [];
+                // Fallback to $_ENV if config was loaded before .env (e.g. PAYOS_CLIENT_ID)
+                if (empty($payosConfig['client_id']) && !empty($_ENV['PAYOS_CLIENT_ID'])) {
+                    $payosConfig['client_id'] = $_ENV['PAYOS_CLIENT_ID'];
+                    $payosConfig['api_key'] = $payosConfig['api_key'] ?? $_ENV['PAYOS_API_KEY'] ?? '';
+                    $payosConfig['checksum_key'] = $payosConfig['checksum_key'] ?? $_ENV['PAYOS_CHECKSUM_KEY'] ?? '';
+                    $payosConfig['api_url'] = $payosConfig['api_url'] ?? $_ENV['PAYOS_API_URL'] ?? 'https://api-merchant.payos.vn';
+                    $payosConfig['base_url'] = $payosConfig['base_url'] ?? $_ENV['PAYOS_BASE_URL'] ?? $_ENV['APP_URL'] ?? 'http://localhost:3000';
+                }
+                return new PayOSPaymentService($db, $paymentModel, $payosConfig);
             default:
                 throw new Exception("Unknown payment method: {$method}");
         }
