@@ -428,6 +428,8 @@ $router->post('/api/v1/orders/{id}/tracking', [OrderController::class, 'updateTr
 // ========================================
 // PAYMENT API ROUTES
 // ========================================
+$router->get('/api/v1/payments', [PaymentController::class, 'index'], [new AuthMiddleware($container)]);
+$router->get('/api/backend/v1/payments', [PaymentController::class, 'index'], [new AuthMiddleware($container)]);
 $router->post('/api/v1/payments/create', [PaymentController::class, 'create'], [new AuthMiddleware($container)]);
 $router->post('/api/v1/payments/{id}/approve', [PaymentController::class, 'approve']); // Public endpoint for QR code approval
 $router->post('/api/v1/payments/vnpay-ipn', [PaymentController::class, 'handleVNPayIPN']);
