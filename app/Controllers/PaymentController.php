@@ -33,6 +33,63 @@ class PaymentController extends Controller
     }
 
     /**
+     * GET /api/v1/payments - List payments for admin (response shape matches frontend expectations)
+     */
+    public function index(Request $req, Response $res)
+    {
+        try {
+            $page = (int)($req->query('page') ?? 1);
+            $limit = (int)($req->query('limit') ?? 100);
+            $limit = min(max(1, $limit), 500);
+            $offset = ($page - 1) * $limit;
+
+            $filters = [];
+            if ($req->query('status') !== null && $req->query('status') !== '') {
+                $filters['status'] = $req->query('status');
+            }
+            if ($req->query('method') !== null && $req->query('method') !== '') {
+                $filters['method'] = $req->query('method');
+            }
+            if ($req->query('search') !== null && trim((string)$req->query('search')) !== '') {
+                $filters['search'] = trim((string)$req->query('search'));
+            }
+
+            $rows = $this->paymentModel->getAllForAdmin($filters, $limit, $offset);
+
+            // Map backend fields to frontend contract (avoid API shape mismatch)
+            $items = [];
+            foreach ($rows as $row) {
+                $status = $row['status'] ?? 'pending';
+                if ($status === 'confirmed') {
+                    $status = 'completed';
+                }
+                $gatewayResponse = null;
+                if (!empty($row['callback_payload'])) {
+                    $decoded = json_decode($row['callback_payload'], true);
+                    $gatewayResponse = is_array($decoded) ? json_encode($decoded, JSON_UNESCAPED_UNICODE) : $row['callback_payload'];
+                }
+                $items[] = [
+                    'payment_id' => (int)$row['payment_id'],
+                    'order_id' => (int)$row['order_id'],
+                    'customer_name' => $row['customer_name'] ?? '',
+                    'amount' => (float)($row['paid_amount'] ?? 0),
+                    'payment_method' => $row['method'] ?? 'unknown',
+                    'status' => $status,
+                    'transaction_id' => $row['transaction_id'] ?? null,
+                    'created_at' => $row['created_at'] ?? null,
+                    'processed_at' => $row['confirmed_at'] ?? null,
+                    'expires_at' => $row['expires_at'] ?? null,
+                    'gateway_response' => $gatewayResponse,
+                ];
+            }
+
+            return $res->json(ResponseHelper::success($items));
+        } catch (Exception $e) {
+            return $res->json(ResponseHelper::serverError('Failed to fetch payments: ' . $e->getMessage()));
+        }
+    }
+
+    /**
      * POST /api/v1/payments/create - Create payment
      */
     public function create(Request $req, Response $res)
@@ -82,12 +139,18 @@ class PaymentController extends Controller
             }
 
             if ($payment['status'] !== 'pending') {
-                return $res->json(ResponseHelper::validationError(['payment' => 'Payment is not pending']));
+                return $res->json(ResponseHelper::validationError(
+                    ['payment' => 'Payment is not pending'],
+                    'Payment is not pending. It may already be approved.'
+                ));
             }
 
             // Check expiration
             if ($payment['expires_at'] && strtotime($payment['expires_at']) < time()) {
-                return $res->json(ResponseHelper::validationError(['payment' => 'Payment has expired']));
+                return $res->json(ResponseHelper::validationError(
+                    ['payment' => 'Payment has expired'],
+                    'Payment has expired.'
+                ));
             }
 
             // Update payment status

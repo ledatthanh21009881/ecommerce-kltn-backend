@@ -156,4 +156,64 @@ class Payment extends Model
         
         return $stmt->fetchAll(\PDO::FETCH_ASSOC);
     }
+
+    /**
+     * Get all payments for admin list with order/customer info.
+     * Returns rows with: payment_id, order_id, method, paid_amount, status, transaction_id,
+     * created_at, confirmed_at, callback_payload, customer_name (from orders -> users).
+     */
+    public function getAllForAdmin(array $filters = [], int $limit = 100, int $offset = 0): array
+    {
+        $sql = "
+            SELECT 
+                p.payment_id,
+                p.order_id,
+                p.method,
+                p.paid_amount,
+                p.status,
+                p.transaction_id,
+                p.created_at,
+                p.confirmed_at,
+                p.expires_at,
+                p.callback_payload,
+                TRIM(CONCAT(COALESCE(u.first_name, ''), ' ', COALESCE(u.last_name, ''))) AS customer_name
+            FROM {$this->table} p
+            LEFT JOIN orders o ON p.order_id = o.order_id
+            LEFT JOIN customers c ON o.customer_id = c.user_id
+            LEFT JOIN users u ON c.user_id = u.user_id
+        ";
+        $whereConditions = [];
+        $params = [];
+
+        if (!empty($filters['status'])) {
+            $whereConditions[] = "p.status = ?";
+            $params[] = $filters['status'];
+        }
+        if (!empty($filters['method'])) {
+            $whereConditions[] = "p.method = ?";
+            $params[] = $filters['method'];
+        }
+        if (!empty($filters['search'])) {
+            $term = "%{$filters['search']}%";
+            $parts = ["p.transaction_id LIKE ?", "u.first_name LIKE ?", "u.last_name LIKE ?", "u.email LIKE ?"];
+            if (is_numeric($filters['search'])) {
+                $parts[] = "p.order_id = ?";
+                $params[] = (int) $filters['search'];
+            }
+            $params[] = $term;
+            $params[] = $term;
+            $params[] = $term;
+            $params[] = $term;
+            $whereConditions[] = "(" . implode(" OR ", $parts) . ")";
+        }
+
+        if (count($whereConditions) > 0) {
+            $sql .= " WHERE " . implode(" AND ", $whereConditions);
+        }
+        $sql .= " ORDER BY p.created_at DESC LIMIT " . (int) $limit . " OFFSET " . (int) $offset;
+
+        $stmt = $this->getConnection()->prepare($sql);
+        $stmt->execute($params);
+        return $stmt->fetchAll(\PDO::FETCH_ASSOC);
+    }
 }
