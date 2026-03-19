@@ -182,25 +182,50 @@ class WebSocketService implements MessageComponentInterface
 
     public function broadcastMessage($data)
     {
-        // This method is called by backend when a new message is saved
-        // We need to broadcast to the Socket.IO server on port 3001
-        // Since we can't directly communicate between servers, we'll use a file-based approach
-        
+        $conversationId = (int)($data['conversation_id'] ?? 0);
+        $message = $data['message'] ?? null;
+        if ($conversationId <= 0 || !$message) {
+            return;
+        }
+
+        // Send directly to connected WebSocket clients in this conversation.
+        // Keep both formats to stay backward-compatible with existing clients.
+        $realtimeData = [
+            'event' => 'new_message',
+            'payload' => [
+                'conversation_id' => $conversationId,
+                'message' => $message
+            ],
+            'type' => 'new_message',
+            'conversation_id' => $conversationId,
+            'message' => $message
+        ];
+
+        $sentCount = 0;
+        foreach ($this->clients as $client) {
+            $clientId = $client->resourceId;
+            if ($this->isClientInConversation($clientId, $conversationId)) {
+                $client->send(json_encode($realtimeData));
+                $sentCount++;
+            }
+        }
+        echo "Broadcasted new_message to {$sentCount} clients in conversation {$conversationId}\n";
+
+        // Keep file queue for compatibility with the secondary Socket.IO server flow.
         $broadcastData = [
             'type' => 'backend_message',
-            'conversation_id' => $data['conversation_id'],
-            'message' => $data['message'],
+            'conversation_id' => $conversationId,
+            'message' => $message,
             'timestamp' => time()
         ];
-        
-        // Write to a temporary file that Socket.IO server can read
+
         $broadcastFile = __DIR__ . '/../../broadcast_queue.json';
         $queue = [];
-        
+
         if (file_exists($broadcastFile)) {
             $queue = json_decode(file_get_contents($broadcastFile), true) ?: [];
         }
-        
+
         $queue[] = $broadcastData;
         file_put_contents($broadcastFile, json_encode($queue));
     }
@@ -211,7 +236,13 @@ class WebSocketService implements MessageComponentInterface
         echo "Total clients: " . count($this->clients) . "\n";
         echo "From client ID: {$from->resourceId}\n";
         
+        $conversationId = (int)$conversationId;
         $typingData = [
+            'event' => 'typing_indicator',
+            'payload' => [
+                'type' => $typingType,
+                'conversation_id' => $conversationId
+            ],
             'type' => $typingType,
             'conversation_id' => $conversationId
         ];
@@ -228,13 +259,29 @@ class WebSocketService implements MessageComponentInterface
             }
             echo "\n";
             
-            if ($client !== $from && isset($this->clientConversations[$clientId]) && in_array($conversationId, $this->clientConversations[$clientId])) {
+            if ($client !== $from && $this->isClientInConversation($clientId, $conversationId)) {
                 $client->send(json_encode($typingData));
                 $sentCount++;
                 echo "Sent typing message to client {$clientId}\n";
             }
         }
         echo "Sent typing message to {$sentCount} clients\n";
+    }
+
+    protected function isClientInConversation($clientId, $conversationId)
+    {
+        if (!isset($this->clientConversations[$clientId])) {
+            return false;
+        }
+
+        $targetConversationId = (int)$conversationId;
+        foreach ($this->clientConversations[$clientId] as $id) {
+            if ((int)$id === $targetConversationId) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     public function sendToUser($userId, $data)
