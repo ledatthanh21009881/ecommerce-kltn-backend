@@ -187,7 +187,14 @@ class MessageController extends BaseController
             $conversationId = $input['conversation_id'] ?? null;
             $content = $input['content'] ?? '';
             $mediaFiles = $input['media'] ?? [];
-            $isLink = $input['is_link'] ?? false;
+            // MySQL column `is_link` is integer. Frontend may send `''` (empty string),
+            // which causes: "Incorrect integer value: '' for column 'is_link'".
+            // Normalize to 0/1.
+            $isLinkRaw = $input['is_link'] ?? false;
+            if (is_string($isLinkRaw)) {
+                $isLinkRaw = trim($isLinkRaw);
+            }
+            $isLink = ($isLinkRaw === true || $isLinkRaw === 1 || $isLinkRaw === '1' || $isLinkRaw === 'true') ? 1 : 0;
 
             if (!$conversationId) {
                 http_response_code(400);
