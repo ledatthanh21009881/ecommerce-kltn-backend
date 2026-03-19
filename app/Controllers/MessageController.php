@@ -636,8 +636,13 @@ class MessageController extends BaseController
         $token = substr($authHeader, 7);
         
         try {
-            $jwtSecret = getenv('JWT_SECRET') ?: 'your-secret-key-here';
-            $decoded = JWT::decode($token, new Key($jwtSecret, 'HS256'));
+            // IMPORTANT: Use the same JWT secret source as the rest of the app (app/config/app.php).
+            // On VPS, JWT_SECRET might not exist in shell env (printenv), but PHP may still load it via $_ENV.
+            // Loading from config keeps WebSocket auth and REST auth consistent.
+            $config = require __DIR__ . '/../config/app.php';
+            $jwtSecret = $config['jwt']['secret'] ?? 'your-secret-key-here';
+            $jwtAlgorithm = $config['jwt']['algorithm'] ?? 'HS256';
+            $decoded = JWT::decode($token, new Key($jwtSecret, $jwtAlgorithm));
             error_log('JWT decoded successfully: ' . json_encode($decoded));
             
             $user = $this->userModel->getUserByAccountId($decoded->account_id);
