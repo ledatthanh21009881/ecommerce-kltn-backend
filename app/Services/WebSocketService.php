@@ -26,25 +26,25 @@ class WebSocketService implements MessageComponentInterface
     public function onOpen(ConnectionInterface $conn)
     {
         $this->clients->attach($conn);
-        echo "New connection! ({$conn->resourceId})\n";
+        error_log("New connection! ({$conn->resourceId})");
     }
 
     public function onMessage(ConnectionInterface $from, $msg)
     {
-        echo "Received message: {$msg}\n";
+        error_log("Received message: {$msg}");
         $data = json_decode($msg, true);
         
         if (!$data) {
-            echo "Failed to decode JSON message\n";
+            error_log("Failed to decode JSON message");
             return;
         }
 
         if (!isset($data['type'])) {
-            echo "Message missing type field\n";
+            error_log("Message missing type field");
             return;
         }
 
-        echo "Message type: {$data['type']}\n";
+        error_log("Message type: {$data['type']}");
 
         switch ($data['type']) {
             case 'auth':
@@ -52,32 +52,32 @@ class WebSocketService implements MessageComponentInterface
                 $this->authenticateUser($from, $token);
                 break;
             case 'join_conversation':
-                echo "Joining conversation: {$data['conversation_id']}\n";
+                error_log("Joining conversation: {$data['conversation_id']}");
                 $this->joinConversation($from, $data['conversation_id']);
                 break;
             case 'leave_conversation':
-                echo "Leaving conversation: {$data['conversation_id']}\n";
+                error_log("Leaving conversation: {$data['conversation_id']}");
                 $this->leaveConversation($from, $data['conversation_id']);
                 break;
             case 'typing_start':
-                echo "Typing start for conversation: {$data['conversation_id']}\n";
+                error_log("Typing start for conversation: {$data['conversation_id']}");
                 $this->broadcastTyping($from, $data['conversation_id'], 'typing_start');
                 break;
             case 'typing_stop':
-                echo "Typing stop for conversation: {$data['conversation_id']}\n";
+                error_log("Typing stop for conversation: {$data['conversation_id']}");
                 $this->broadcastTyping($from, $data['conversation_id'], 'typing_stop');
                 break;
             case 'join_payment':
                 $paymentId = $data['payment_id'] ?? null;
                 if ($paymentId) {
-                    echo "Joining payment room: {$paymentId}\n";
+                    error_log("Joining payment room: {$paymentId}");
                     $this->joinPaymentRoom($from, $paymentId);
                 }
                 break;
             case 'leave_payment':
                 $paymentId = $data['payment_id'] ?? null;
                 if ($paymentId) {
-                    echo "Leaving payment room: {$paymentId}\n";
+                    error_log("Leaving payment room: {$paymentId}");
                     $this->leavePaymentRoom($from, $paymentId);
                 }
                 break;
@@ -98,12 +98,12 @@ class WebSocketService implements MessageComponentInterface
             unset($this->clientPayments[$clientId]);
         }
         
-        echo "Connection {$conn->resourceId} has disconnected\n";
+        error_log("Connection {$conn->resourceId} has disconnected");
     }
 
     public function onError(ConnectionInterface $conn, \Exception $e)
     {
-        echo "An error has occurred: {$e->getMessage()}\n";
+        error_log("An error has occurred: {$e->getMessage()}");
         $conn->close();
     }
 
@@ -127,16 +127,16 @@ class WebSocketService implements MessageComponentInterface
             $this->userConnections[$userId] = $conn;
             $conn->userId = $userId;
             
-            echo "User {$userId} authenticated\n";
+            error_log("User {$userId} authenticated");
         } catch (\Exception $e) {
-            echo "Authentication failed: {$e->getMessage()}\n";
+            error_log("Authentication failed: {$e->getMessage()}");
         }
     }
 
     protected function joinConversation($conn, $conversationId)
     {
         if (!isset($conn->userId)) {
-            echo "Cannot join conversation: no user ID\n";
+            error_log("Cannot join conversation: no user ID");
             return;
         }
         
@@ -152,12 +152,9 @@ class WebSocketService implements MessageComponentInterface
             $this->clientConversations[$clientId][] = $conversationId;
         }
         
-        echo "User {$conn->userId} joined conversation {$conversationId}\n";
-        echo "User conversations: " . implode(', ', $this->clientConversations[$clientId]) . "\n";
-        
-        // Debug: Check if conversation was actually added
-        echo "Debug - Conversations after join: ";
-        var_dump($this->clientConversations[$clientId]);
+        error_log("User {$conn->userId} joined conversation {$conversationId}");
+        error_log("User conversations: " . implode(', ', $this->clientConversations[$clientId]));
+        error_log("Debug - Conversations after join: " . json_encode(array_values($this->clientConversations[$clientId])));
     }
 
     protected function leaveConversation($conn, $conversationId)
@@ -170,7 +167,7 @@ class WebSocketService implements MessageComponentInterface
             return $id != $conversationId;
         });
         
-        echo "User {$conn->userId} left conversation {$conversationId}\n";
+        error_log("User {$conn->userId} left conversation {$conversationId}");
     }
 
     protected function removeUserConnection($conn)
@@ -209,7 +206,7 @@ class WebSocketService implements MessageComponentInterface
                 $sentCount++;
             }
         }
-        echo "Broadcasted new_message to {$sentCount} clients in conversation {$conversationId}\n";
+        error_log("Broadcasted new_message to {$sentCount} clients in conversation {$conversationId}");
 
         // Keep file queue for compatibility with the secondary Socket.IO server flow.
         $broadcastData = [
@@ -232,9 +229,9 @@ class WebSocketService implements MessageComponentInterface
 
     protected function broadcastTyping($from, $conversationId, $typingType)
     {
-        echo "Broadcasting typing: {$typingType} for conversation: {$conversationId}\n";
-        echo "Total clients: " . count($this->clients) . "\n";
-        echo "From client ID: {$from->resourceId}\n";
+        error_log("Broadcasting typing: {$typingType} for conversation: {$conversationId}");
+        error_log("Total clients: " . count($this->clients));
+        error_log("From client ID: {$from->resourceId}");
         
         $conversationId = (int)$conversationId;
         $typingData = [
@@ -250,22 +247,22 @@ class WebSocketService implements MessageComponentInterface
         $sentCount = 0;
         foreach ($this->clients as $client) {
             $clientId = $client->resourceId;
-            echo "Checking client {$clientId}: ";
-            echo "Is not from: " . ($client !== $from ? 'yes' : 'no') . ", ";
-            echo "Has conversations: " . (isset($this->clientConversations[$clientId]) ? 'yes' : 'no') . ", ";
+            $clientLog = "Checking client {$clientId}: ";
+            $clientLog .= "Is not from: " . ($client !== $from ? 'yes' : 'no') . ", ";
+            $clientLog .= "Has conversations: " . (isset($this->clientConversations[$clientId]) ? 'yes' : 'no') . ", ";
             if (isset($this->clientConversations[$clientId])) {
-                echo "Conversations: " . implode(', ', $this->clientConversations[$clientId]) . ", ";
-                echo "In conversation: " . (in_array($conversationId, $this->clientConversations[$clientId]) ? 'yes' : 'no');
+                $clientLog .= "Conversations: " . implode(', ', $this->clientConversations[$clientId]) . ", ";
+                $clientLog .= "In conversation: " . (in_array($conversationId, $this->clientConversations[$clientId]) ? 'yes' : 'no');
             }
-            echo "\n";
+            error_log($clientLog);
             
             if ($client !== $from && $this->isClientInConversation($clientId, $conversationId)) {
                 $client->send(json_encode($typingData));
                 $sentCount++;
-                echo "Sent typing message to client {$clientId}\n";
+                error_log("Sent typing message to client {$clientId}");
             }
         }
-        echo "Sent typing message to {$sentCount} clients\n";
+        error_log("Sent typing message to {$sentCount} clients");
     }
 
     protected function isClientInConversation($clientId, $conversationId)
@@ -304,7 +301,7 @@ class WebSocketService implements MessageComponentInterface
         }
         if (!in_array($paymentId, $this->clientPayments[$clientId])) {
             $this->clientPayments[$clientId][] = $paymentId;
-            echo "Client {$clientId} joined payment room: {$paymentId}\n";
+            error_log("Client {$clientId} joined payment room: {$paymentId}");
         }
     }
 
@@ -319,7 +316,7 @@ class WebSocketService implements MessageComponentInterface
                 $this->clientPayments[$clientId],
                 fn($id) => $id != $paymentId
             );
-            echo "Client {$clientId} left payment room: {$paymentId}\n";
+            error_log("Client {$clientId} left payment room: {$paymentId}");
         }
     }
 
@@ -344,11 +341,11 @@ class WebSocketService implements MessageComponentInterface
             if (isset($this->clientPayments[$clientId]) && in_array($paymentId, $this->clientPayments[$clientId])) {
                 $client->send(json_encode($updateData));
                 $sentCount++;
-                echo "Sent payment update to client {$clientId}\n";
+                error_log("Sent payment update to client {$clientId}");
             }
         }
         
-        echo "Broadcasted payment update to {$sentCount} clients: payment_id={$paymentId}, order_id={$orderId}, status={$status}\n";
+        error_log("Broadcasted payment update to {$sentCount} clients: payment_id={$paymentId}, order_id={$orderId}, status={$status}");
         
         // Also write to file queue for Socket.IO server (if using)
         $broadcastFile = __DIR__ . '/../../broadcast_queue.json';
@@ -369,7 +366,7 @@ class WebSocketService implements MessageComponentInterface
             $port
         );
 
-        echo "WebSocket server started on port {$port}\n";
+        error_log("WebSocket server started on port {$port}");
         $server->run();
     }
 }
