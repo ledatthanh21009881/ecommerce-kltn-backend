@@ -111,7 +111,9 @@ class WebSocketService implements MessageComponentInterface
     {
         try {
             // Load config the same way as Container
-            $configPath = __DIR__ . '/../../config';
+            // WebSocketService lives at: app/Services/ -> config is at: app/config/
+            // Using the wrong relative path breaks JWT signature verification.
+            $configPath = __DIR__ . '/../config';
             $config = [];
             foreach (glob($configPath . '/*.php') as $file) {
                 $key = basename($file, '.php');
