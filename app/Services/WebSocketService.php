@@ -67,6 +67,31 @@ class WebSocketService implements MessageComponentInterface
                 error_log("Typing stop for conversation: {$data['conversation_id']}");
                 $this->broadcastTyping($from, $data['conversation_id'], 'typing_stop');
                 break;
+            case 'new_message':
+                $conversationId = (int)($data['conversation_id'] ?? 0);
+                $message = $data['message'] ?? null;
+                if ($conversationId > 0 && $message) {
+                    $realtimeData = [
+                        'event' => 'new_message',
+                        'payload' => [
+                            'conversation_id' => $conversationId,
+                            'message' => $message
+                        ],
+                        'type' => 'new_message',
+                        'conversation_id' => $conversationId,
+                        'message' => $message
+                    ];
+                    $sentCount = 0;
+                    foreach ($this->clients as $client) {
+                        $clientId = $client->resourceId;
+                        if ($client !== $from && $this->isClientInConversation($clientId, $conversationId)) {
+                            $client->send(json_encode($realtimeData));
+                            $sentCount++;
+                        }
+                    }
+                    error_log("WS relay new_message to {$sentCount} clients in conversation {$conversationId}");
+                }
+                break;
             case 'join_payment':
                 $paymentId = $data['payment_id'] ?? null;
                 if ($paymentId) {
