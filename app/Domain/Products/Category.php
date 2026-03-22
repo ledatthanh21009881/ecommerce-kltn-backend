@@ -108,7 +108,7 @@ class Category extends Model
                 c2.category_name as parent_name
             FROM categories c1
             LEFT JOIN categories c2 ON c1.parent_id = c2.category_id
-            WHERE c1.slug = ? AND c1.is_active = 1
+            WHERE c1.slug = ?
         ";
         
         $stmt = $this->getConnection()->prepare($sql);
