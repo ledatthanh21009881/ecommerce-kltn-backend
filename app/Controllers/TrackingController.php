@@ -102,6 +102,7 @@ class TrackingController extends Controller
                     o.estimated_delivery_at,
                     
                     -- Customer info
+                    o.customer_id as customer_id,
                     CONCAT(c.first_name, ' ', c.last_name) as customer_name,
                     c.phone as customer_phone,
                     JSON_UNQUOTE(JSON_EXTRACT(o.shipping_address_snapshot, '$.address_line')) as customer_address,
