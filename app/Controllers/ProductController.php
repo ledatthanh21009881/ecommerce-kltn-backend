@@ -984,6 +984,7 @@ class ProductController extends Controller
                         pv.stock_quantity,
                         pv.status,
                         p.product_name,
+                        p.list_price,
                         s.size_name,
                         CONCAT(p.product_name, ' - ', s.size_name) as display_name
                     FROM product_variants pv
@@ -1001,6 +1002,7 @@ class ProductController extends Controller
                 $variant['product_id'] = (int)$variant['product_id'];
                 $variant['size_id'] = (int)$variant['size_id'];
                 $variant['stock_quantity'] = (int)$variant['stock_quantity'];
+                $variant['list_price'] = isset($variant['list_price']) ? (float)$variant['list_price'] : 0.0;
             }
             
             return $res->json(ResponseHelper::success($variants, 'Variants retrieved successfully'));

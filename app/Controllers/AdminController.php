@@ -471,4 +471,35 @@ class AdminController extends Controller
             return $res->json(ResponseHelper::serverError('Failed to delete user: ' . $e->getMessage()));
         }
     }
+
+    /**
+     * GET /api/backend/v1/users/{id}/addresses — Địa chỉ đã lưu của user (admin tạo đơn)
+     */
+    public function getUserAddresses(Request $req, Response $res)
+    {
+        try {
+            $userId = (int) $req->getAttribute('id');
+            if ($userId <= 0) {
+                return $res->json(ResponseHelper::validationError(['id' => 'Invalid user id']));
+            }
+
+            $pdo = $this->container->database()->getConnection();
+            $sql = "SELECT address_id, user_id, receiver_name, phone, address_line, ward, district, province, is_default, lat, lng
+                    FROM addresses WHERE user_id = ? ORDER BY is_default DESC, address_id DESC";
+            $stmt = $pdo->prepare($sql);
+            $stmt->execute([$userId]);
+            $list = $stmt->fetchAll(\PDO::FETCH_ASSOC);
+
+            foreach ($list as &$row) {
+                $row['address_id'] = (int) $row['address_id'];
+                $row['user_id'] = (int) $row['user_id'];
+                $row['is_default'] = (int) $row['is_default'];
+            }
+            unset($row);
+
+            return $res->json(ResponseHelper::success($list));
+        } catch (Exception $e) {
+            return $res->json(ResponseHelper::serverError('Failed to fetch addresses: ' . $e->getMessage()));
+        }
+    }
 }
