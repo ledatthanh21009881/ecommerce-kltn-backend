@@ -206,13 +206,28 @@ class MessageController extends BaseController
                 return;
             }
 
+            $replyToMessageId = isset($input['reply_to_message_id']) ? (int) $input['reply_to_message_id'] : 0;
+            if ($replyToMessageId > 0) {
+                $parent = $this->messageModel->findById($replyToMessageId);
+                if (!$parent || (int) $parent['conversation_id'] !== (int) $conversationId) {
+                    http_response_code(400);
+                    echo json_encode([
+                        'success' => false,
+                        'message' => 'Invalid reply_to_message_id for this conversation',
+                        'status_code' => 400
+                    ]);
+                    return;
+                }
+            }
+
             // Tạo tin nhắn
             $messageData = [
                 'conversation_id' => $conversationId,
                 'sender_id' => $user['user_id'],
                 'content' => $content,
                 'sent_at' => date('Y-m-d H:i:s'),
-                'is_link' => $isLink
+                'is_link' => $isLink,
+                'reply_to_message_id' => $replyToMessageId > 0 ? $replyToMessageId : null,
             ];
 
             $messageId = $this->messageModel->create($messageData);

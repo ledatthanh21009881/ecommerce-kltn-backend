@@ -20,9 +20,16 @@ class Message
     public function getMessagesByConversation($conversationId, $limit = 50, $offset = 0)
     {
         $sql = "SELECT m.*, u.first_name, u.last_name, u.email, u.avatar_url,
-                       DATE_FORMAT(m.sent_at, '%Y-%m-%d %H:%i:%s') as sent_at
+                       DATE_FORMAT(m.sent_at, '%Y-%m-%d %H:%i:%s') as sent_at,
+                       rp.content AS reply_parent_content,
+                       rp.sender_id AS reply_parent_sender_id,
+                       rp.is_link AS reply_parent_is_link,
+                       ru.first_name AS reply_parent_first_name,
+                       ru.last_name AS reply_parent_last_name
                 FROM messages m
                 JOIN users u ON u.user_id = m.sender_id
+                LEFT JOIN messages rp ON rp.message_id = m.reply_to_message_id AND rp.deleted_at IS NULL
+                LEFT JOIN users ru ON ru.user_id = rp.sender_id
                 WHERE m.conversation_id = ? AND m.deleted_at IS NULL
                 ORDER BY m.sent_at ASC
                 LIMIT ? OFFSET ?";
@@ -31,9 +38,9 @@ class Message
         $stmt->execute([$conversationId, $limit, $offset]);
         $messages = $stmt->fetchAll(\PDO::FETCH_ASSOC);
 
-        // Lấy media cho từng tin nhắn
         foreach ($messages as &$message) {
             $message['media'] = $this->getMessageMedia($message['message_id']);
+            $message = $this->attachReplyToPayload($message);
         }
 
         return $messages;
@@ -66,15 +73,22 @@ class Message
 
     public function create($data)
     {
-        $sql = "INSERT INTO messages (conversation_id, sender_id, content, sent_at, is_link) 
-                VALUES (?, ?, ?, ?, ?)";
+        $replyTo = $data['reply_to_message_id'] ?? null;
+        if ($replyTo === '' || $replyTo === false) {
+            $replyTo = null;
+        }
+        $replyTo = $replyTo !== null ? (int) $replyTo : null;
+
+        $sql = "INSERT INTO messages (conversation_id, sender_id, content, sent_at, is_link, reply_to_message_id) 
+                VALUES (?, ?, ?, ?, ?, ?)";
         $stmt = $this->db->prepare($sql);
         $stmt->execute([
             $data['conversation_id'],
             $data['sender_id'],
             $data['content'],
             $data['sent_at'],
-            $data['is_link'] ?? false
+            $data['is_link'] ?? false,
+            $replyTo,
         ]);
         return $this->db->lastInsertId();
     }
@@ -82,9 +96,16 @@ class Message
     public function getById($messageId)
     {
         $sql = "SELECT m.*, u.first_name, u.last_name, u.email, u.avatar_url,
-                       DATE_FORMAT(m.sent_at, '%Y-%m-%d %H:%i:%s') as sent_at
+                       DATE_FORMAT(m.sent_at, '%Y-%m-%d %H:%i:%s') as sent_at,
+                       rp.content AS reply_parent_content,
+                       rp.sender_id AS reply_parent_sender_id,
+                       rp.is_link AS reply_parent_is_link,
+                       ru.first_name AS reply_parent_first_name,
+                       ru.last_name AS reply_parent_last_name
                 FROM messages m
                 JOIN users u ON u.user_id = m.sender_id
+                LEFT JOIN messages rp ON rp.message_id = m.reply_to_message_id AND rp.deleted_at IS NULL
+                LEFT JOIN users ru ON ru.user_id = rp.sender_id
                 WHERE m.message_id = ? AND m.deleted_at IS NULL";
         
         $stmt = $this->db->prepare($sql);
@@ -93,7 +114,48 @@ class Message
 
         if ($message) {
             $message['media'] = $this->getMessageMedia($message['message_id']);
+            $message = $this->attachReplyToPayload($message);
         }
+
+        return $message;
+    }
+
+    /**
+     * Gắn object reply_to cho API và bỏ cột join tạm.
+     */
+    private function attachReplyToPayload(array $message)
+    {
+        $rid = isset($message['reply_to_message_id']) ? (int) $message['reply_to_message_id'] : 0;
+        if ($rid <= 0) {
+            $message['reply_to'] = null;
+            unset(
+                $message['reply_parent_content'],
+                $message['reply_parent_sender_id'],
+                $message['reply_parent_is_link'],
+                $message['reply_parent_first_name'],
+                $message['reply_parent_last_name']
+            );
+
+            return $message;
+        }
+
+        $message['reply_to'] = [
+            'message_id' => $rid,
+            'content' => $message['reply_parent_content'] ?? '',
+            'sender_id' => (int) ($message['reply_parent_sender_id'] ?? 0),
+            'is_link' => (int) ($message['reply_parent_is_link'] ?? 0),
+            'first_name' => $message['reply_parent_first_name'] ?? '',
+            'last_name' => $message['reply_parent_last_name'] ?? '',
+            'media' => $this->getMessageMedia($rid),
+        ];
+
+        unset(
+            $message['reply_parent_content'],
+            $message['reply_parent_sender_id'],
+            $message['reply_parent_is_link'],
+            $message['reply_parent_first_name'],
+            $message['reply_parent_last_name']
+        );
 
         return $message;
     }

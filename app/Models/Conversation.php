@@ -21,7 +21,11 @@ class Conversation
     {
         $sql = "SELECT c.*, u.first_name, u.last_name, u.email, u.avatar_url, 
                        m.content as last_message, m.sent_at as last_message_time,
-                       (SELECT COUNT(*) FROM messages WHERE conversation_id = c.conversation_id AND is_read = 0) as unread_count
+                       (SELECT COUNT(*) FROM messages mu
+                        WHERE mu.conversation_id = c.conversation_id
+                          AND mu.is_read = 0
+                          AND mu.deleted_at IS NULL
+                          AND mu.sender_id = c.customer_id) as unread_count
                 FROM conversations c
                 JOIN users u ON u.user_id = c.customer_id
                 LEFT JOIN messages m ON m.message_id = (SELECT message_id FROM messages WHERE conversation_id = c.conversation_id ORDER BY sent_at DESC LIMIT 1)

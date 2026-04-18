@@ -160,6 +160,7 @@ $router->post('/api/backend/v1/orders/{id}/status', [OrderController::class, 'up
 $router->post('/api/backend/v1/orders/{id}/assign-shipper', [OrderController::class, 'assignShipper'], [new AuthMiddleware($container)]);
 $router->post('/api/backend/v1/orders/{id}/send-invoice', [OrderController::class, 'sendInvoice'], [new AuthMiddleware($container)]);
 $router->delete('/api/backend/v1/orders/{id}', [OrderController::class, 'destroy'], [new AuthMiddleware($container)]);
+$router->get('/api/backend/v1/admin/dashboard', [AdminController::class, 'dashboard'], [new AuthMiddleware($container)]);
 $router->get('/api/test/available-shippers', [OrderController::class, 'getAvailableShippers']);
 
 // ========================================
