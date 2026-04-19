@@ -27,29 +27,40 @@ class Router {
     public function put($p, $h, $mw = []) { $this->add('PUT', $p, $h, $mw); }
     public function delete($p, $h, $mw = []) { $this->add('DELETE', $p, $h, $mw); }
     public function patch($p, $h, $mw = []) { $this->add('PATCH', $p, $h, $mw); }
+    public function options($p, $h, $mw = []) { $this->add('OPTIONS', $p, $h, $mw); }
     
     public function getRoutes(): array {
         return $this->routes;
     }
     
     public function dispatch(): void {
-        $m = $this->req->method(); 
-        $p = rtrim($this->req->path(), '/') ?: '/';
-        
-        foreach($this->routes as $r) {
-            // Check for exact match first
-            if($r['method'] === $m && $r['path'] === $p) {
-                $this->executeRoute($r);
-                return;
-            }
-            // Check for path parameters
-            if($r['method'] === $m && $this->matchesPattern($r['path'], $p)) {
-                $this->executeRoute($r);
-                return;
-            }
-        }
-        $this->res->json(['message' => 'Not Found'], 404);
+    $m = $this->req->method();
+    $p = rtrim($this->req->path(), '/') ?: '/';
+
+    // Ensure CORS headers are added for all responses, including OPTIONS
+    if ($m === 'OPTIONS') {
+        $this->res->setHeader('Access-Control-Allow-Origin', '*');
+        $this->res->setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, DELETE, PUT, PATCH');
+        $this->res->setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type, Accept');
+        $this->res->setHeader('Access-Control-Max-Age', '86400');
+        $this->res->json([], 204);
+        return;
     }
+
+    foreach($this->routes as $r) {
+        if($r['method'] === $m && $r['path'] === $p) {
+            $this->executeRoute($r);
+            return;
+        }
+
+        if($r['method'] === $m && $this->matchesPattern($r['path'], $p)) {
+            $this->executeRoute($r);
+            return;
+        }
+    }
+
+    $this->res->json(['message' => 'Not Found'], 404);
+}
     
     private function matchesPattern(string $pattern, string $path): bool {
         // Convert {param} to regex pattern

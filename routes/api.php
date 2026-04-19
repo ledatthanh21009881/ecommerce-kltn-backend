@@ -804,3 +804,6 @@ $router->delete('/api/backend/v1/content/categories/{id}', [ContentCategoryContr
 // PRODUCT VARIANTS API ROUTES (for Purchase Receipts)
 // ========================================
 $router->get('/api/backend/v1/products/variants', [ProductController::class, 'getAllVariants'], [new AuthMiddleware($container)]);
+$router->options('/{any:.*}', function($req, $res) {
+    return $res->json(['success' => true, 'message' => 'CORS preflight handled']);
+});
