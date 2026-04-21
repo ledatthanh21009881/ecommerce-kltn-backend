@@ -510,15 +510,17 @@ class AuthController extends Controller
             
             // Generate reset token
             $resetToken = bin2hex(random_bytes(32));
-            $expiresAt = date('Y-m-d H:i:s', strtotime('+1 hour'));
             
             // Save reset token to database
             $pdo = $this->container->database()->getConnection();
-            $stmt = $pdo->prepare("UPDATE accounts SET password_reset_token = ?, reset_token_expires_at = ? WHERE account_id = ?");
-            $stmt->execute([$resetToken, $expiresAt, $account['account_id']]);
+            $stmt = $pdo->prepare("UPDATE accounts SET password_reset_token = ?, reset_token_expires_at = DATE_ADD(NOW(), INTERVAL 1 HOUR) WHERE account_id = ?");
+            $stmt->execute([$resetToken, $account['account_id']]);
             
-            // Create reset link
-            $resetLink = "http://localhost:3000/reset-password?token=" . $resetToken;
+            // Create reset link (normalized to avoid malformed spaces in email clients)
+            $frontendBaseUrl = rtrim($_ENV['PAYOS_BASE_URL'] ?? 'http://localhost:3000', '/');
+            $resetLink = $frontendBaseUrl . '/reset-password?' . http_build_query([
+                'token' => trim($resetToken),
+            ]);
             
             // Send email with reset link
             $emailService = new \App\Support\EmailService();
@@ -553,6 +555,35 @@ class AuthController extends Controller
         
         return $password;
     }
+
+    /**
+     * Validate reset password token.
+     */
+    public function validateResetToken(Request $req, Response $res)
+    {
+        $data = $req->json();
+
+        $validator = Validator::make($data, [
+            'token' => 'required',
+        ]);
+
+        if (!$validator->validate()) {
+            return $res->json(ResponseHelper::validationError($validator->getErrors()));
+        }
+
+        try {
+            $token = (string)$data['token'];
+
+            $account = $this->accountModel->findByResetToken($token);
+            if (!$account) {
+                return $res->json(ResponseHelper::error('Invalid or expired reset token'));
+            }
+
+            return $res->json(ResponseHelper::success(null, 'Reset token is valid'));
+        } catch (Exception $e) {
+            return $res->json(ResponseHelper::serverError('Token validation failed: ' . $e->getMessage()));
+        }
+    }
     
     /**
      * Reset Password - Reset password using token
@@ -564,7 +595,7 @@ class AuthController extends Controller
         // Validate input
         $validator = Validator::make($data, [
             'token' => 'required',
-            'new_password' => 'required|min:6',
+            'new_password' => 'required',
             'confirm_password' => 'required'
         ]);
         
@@ -1089,7 +1120,7 @@ class AuthController extends Controller
         $validator = Validator::make($data, [
             'email' => 'required|email',
             'otp' => 'required|string|size:6',
-            'new_password' => 'required|min:6',
+            'new_password' => 'required',
             'confirm_password' => 'required'
         ]);
         

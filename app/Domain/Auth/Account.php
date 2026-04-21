@@ -109,11 +109,10 @@ class Account extends Model
     public function generatePasswordResetToken(int $accountId): string
     {
         $token = bin2hex(random_bytes(32));
-        $expiresAt = date('Y-m-d H:i:s', time() + 3600); // 1 hour
         
-        $sql = "UPDATE {$this->table} SET password_reset_token = ?, reset_token_expires_at = ? WHERE {$this->primaryKey} = ?";
+        $sql = "UPDATE {$this->table} SET password_reset_token = ?, reset_token_expires_at = DATE_ADD(NOW(), INTERVAL 1 HOUR) WHERE {$this->primaryKey} = ?";
         $stmt = $this->getConnection()->prepare($sql);
-        $stmt->execute([$token, $expiresAt, $accountId]);
+        $stmt->execute([$token, $accountId]);
         
         return $token;
     }

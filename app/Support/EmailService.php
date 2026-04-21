@@ -264,6 +264,9 @@ class EmailService
      */
     private function getPasswordResetLinkTemplate(string $accountName, string $resetLink): string
     {
+        $safeLink = htmlspecialchars(trim($resetLink), ENT_QUOTES, 'UTF-8');
+        $displayLink = preg_replace('#^https?://#i', '', trim($resetLink)) ?? trim($resetLink);
+        $safeDisplayLink = htmlspecialchars($displayLink, ENT_QUOTES, 'UTF-8');
         return "
         <html>
         <head>
@@ -273,9 +276,11 @@ class EmailService
             <h2>Reset Your Password</h2>
             <p>Hello {$accountName},</p>
             <p>You have requested to reset your password. Click the link below to set a new password:</p>
-            <p><a href='{$resetLink}' style='background-color: #4F46E5; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; display: inline-block;'>Reset Password</a></p>
-            <p>Or copy and paste this link into your browser:</p>
-            <p>{$resetLink}</p>
+            <p><a href='{$safeLink}' style='background-color: #4F46E5; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; display: inline-block;'>Reset Password</a></p>
+            <p>If the button does not work, open this link in your browser:</p>
+            <p style='font-family: Arial, sans-serif; line-height: 1.6; margin: 8px 0;'>
+                <a href='{$safeLink}' style='color: #2563eb; text-decoration: underline;'>{$safeDisplayLink}</a>
+            </p>
             <p>This link will expire in 1 hour.</p>
             <p>If you didn't request this password reset, please ignore this email.</p>
             <br>
