@@ -1,7 +1,7 @@
 <?php
 declare(strict_types=1);
 
-use App\Controllers\{AddressController, AuthController, ProductController, ProductImageController, OrderController, AdminController, CategoryController, CustomerController, ShipperController, UserController, RoleController, InventoryController, InvoiceController, VoucherController, MessageController, ShippingController, CartController, SupplierController, PurchaseReceiptController, StockAdjustmentController, TrackingController, NotificationController, ContentController, ContentCategoryController, PaymentController, CollectionController, UserOrderController};
+use App\Controllers\{AddressController, AuthController, ProductController, ProductImageController, OrderController, AdminController, CategoryController, CustomerController, ShipperController, UserController, RoleController, InventoryController, InvoiceController, VoucherController, MessageController, ShippingController, CartController, SupplierController, PurchaseReceiptController, StockAdjustmentController, TrackingController, NotificationController, ContentController, ContentCategoryController, PaymentController, CollectionController, UserOrderController, SiteSettingsController};
 use App\Middlewares\{AuthMiddleware, AdminMiddleware};
 
 // Debug test route
@@ -162,6 +162,11 @@ $router->post('/api/backend/v1/orders/{id}/assign-shipper', [OrderController::cl
 $router->post('/api/backend/v1/orders/{id}/send-invoice', [OrderController::class, 'sendInvoice'], [new AuthMiddleware($container)]);
 $router->delete('/api/backend/v1/orders/{id}', [OrderController::class, 'destroy'], [new AuthMiddleware($container)]);
 $router->get('/api/backend/v1/admin/dashboard', [AdminController::class, 'dashboard'], [new AuthMiddleware($container)]);
+$router->get('/api/v1/public/site-settings', [SiteSettingsController::class, 'publicSettings']);
+$router->get('/api/backend/v1/settings', [SiteSettingsController::class, 'adminGet'], [new AdminMiddleware($container)]);
+$router->put('/api/backend/v1/settings', [SiteSettingsController::class, 'adminUpdate'], [new AdminMiddleware($container)]);
+$router->post('/api/backend/v1/settings', [SiteSettingsController::class, 'adminUpdate'], [new AdminMiddleware($container)]);
+$router->post('/api/backend/v1/settings/favicon', [SiteSettingsController::class, 'uploadFavicon'], [new AdminMiddleware($container)]);
 $router->get('/api/test/available-shippers', [OrderController::class, 'getAvailableShippers']);
 
 // ========================================
