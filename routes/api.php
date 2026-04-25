@@ -214,6 +214,16 @@ $router->get('/api/collections/{collection_id}/images', [CollectionController::c
 $router->get('/api/collections/{slug}', [CollectionController::class, 'showBySlug']);
 
 // ========================================
+// COLLECTIONS ROUTES (admin, auth required)
+// ========================================
+$router->get('/api/backend/v1/collections', [CollectionController::class, 'adminIndex'], [new AuthMiddleware($container)]);
+$router->get('/api/backend/v1/collections/{id}', [CollectionController::class, 'adminShow'], [new AuthMiddleware($container)]);
+$router->post('/api/backend/v1/collections', [CollectionController::class, 'adminStore'], [new AuthMiddleware($container)]);
+$router->put('/api/backend/v1/collections/reorder', [CollectionController::class, 'adminReorder'], [new AuthMiddleware($container)]);
+$router->put('/api/backend/v1/collections/{id}', [CollectionController::class, 'adminUpdate'], [new AuthMiddleware($container)]);
+$router->delete('/api/backend/v1/collections/{id}', [CollectionController::class, 'adminDestroy'], [new AuthMiddleware($container)]);
+
+// ========================================
 // CART MANAGEMENT ROUTES
 // ========================================
 // Cart routes - allow guest users (no auth required, but middleware will check if token exists)
@@ -786,6 +796,9 @@ $router->delete('/api/backend/v1/notifications/{id}', [NotificationController::c
 // ========================================
 // CONTENT MANAGEMENT SYSTEM API ROUTES
 // ========================================
+// Public content endpoint (no auth)
+$router->get('/api/backend/v1/content/public/slug/{slug}', [ContentController::class, 'getPublicBySlug']);
+
 // Content CRUD
 $router->get('/api/backend/v1/content', [ContentController::class, 'index'], [new AuthMiddleware($container)]);
 $router->get('/api/backend/v1/content/{id}', [ContentController::class, 'show'], [new AuthMiddleware($container)]);

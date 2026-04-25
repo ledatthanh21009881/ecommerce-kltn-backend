@@ -430,6 +430,77 @@ class ContentController extends Controller
     }
 
     /**
+     * GET /api/backend/v1/content/public/slug/{slug}
+     * Public endpoint for frontend pages without auth.
+     */
+    public function getPublicBySlug(Request $req, Response $res): void
+    {
+        try {
+            $slug = $req->param('slug');
+
+            if (!$slug) {
+                $res->json(ResponseHelper::badRequest('Slug is required'));
+                return;
+            }
+
+            // Auto-publish scheduled content
+            $this->autoPublishScheduled();
+
+            $sql = "SELECT
+                        c.*,
+                        u.user_id as author_id,
+                        CONCAT(u.first_name, ' ', u.last_name) as author_name
+                    FROM contents c
+                    LEFT JOIN users u ON c.author_id = u.user_id
+                    WHERE c.slug = ? AND c.status = 'published'";
+
+            $stmt = $this->pdo->prepare($sql);
+            $stmt->execute([$slug]);
+            $content = $stmt->fetch(PDO::FETCH_ASSOC);
+
+            if (!$content) {
+                $res->json(ResponseHelper::notFound('Content not found'));
+                return;
+            }
+
+            // Check display date range
+            $now = date('Y-m-d H:i:s');
+            if ($content['display_start'] && $content['display_start'] > $now) {
+                $res->json(ResponseHelper::notFound('Content not yet published'));
+                return;
+            }
+            if ($content['display_end'] && $content['display_end'] < $now) {
+                $res->json(ResponseHelper::notFound('Content has expired'));
+                return;
+            }
+
+            // Get categories
+            $catSql = "SELECT
+                        cc.category_id,
+                        cc.name as category_name,
+                        cc.slug as category_slug
+                      FROM content_category_relations ccr
+                      JOIN content_categories cc ON ccr.category_id = cc.category_id
+                      WHERE ccr.content_id = ?";
+            $catStmt = $this->pdo->prepare($catSql);
+            $catStmt->execute([(int)$content['content_id']]);
+            $content['categories'] = $catStmt->fetchAll(PDO::FETCH_ASSOC);
+
+            $res->json(ResponseHelper::success($content, 'Content retrieved successfully'));
+            return;
+        } catch (Exception $e) {
+            error_log('Error fetching public content by slug: ' . $e->getMessage());
+            $res->status(200)->json([
+                'success' => false,
+                'message' => 'Failed to fetch content',
+                'status_code' => 200,
+                'data' => null
+            ]);
+            return;
+        }
+    }
+
+    /**
      * POST /api/backend/v1/content - Tạo content mới
      */
     public function store(Request $req, Response $res): void

@@ -5,8 +5,10 @@ declare(strict_types=1);
 namespace App\Controllers;
 
 use App\Core\{Controller, Request, Response, Container};
+use App\Domain\Orders\Order;
 use App\Domain\Payments\Payment;
 use App\Services\Payment\{MockQRPaymentService, VNPayPaymentService, VietQRPaymentService, CODPaymentService, PayOSPaymentService};
+use App\Services\NotificationService;
 use App\Support\ResponseHelper;
 use App\Core\Validator;
 use Exception;
@@ -15,12 +17,14 @@ use PDO;
 class PaymentController extends Controller
 {
     private Payment $paymentModel;
+    private Order $orderModel;
     private array $config;
 
     public function __construct(Container $container)
     {
         parent::__construct($container);
         $this->paymentModel = new Payment($container->get('database'));
+        $this->orderModel = new Order($container->get('database'));
         // Get config from container, fallback to loading from app.php if not found
         try {
             $config = $container->get('config');
@@ -161,6 +165,9 @@ class PaymentController extends Controller
             $stmt = $this->container->database()->getConnection()->prepare("UPDATE orders SET status = 'processing' WHERE order_id = ? AND status = 'pending'");
             $stmt->execute([$orderId]);
 
+            // Auto-assign shipper after transfer payment is confirmed.
+            $this->autoAssignOrderAfterPaymentConfirmed($orderId);
+
             return $res->json(ResponseHelper::success([
                 'payment_id' => $paymentId,
                 'status' => 'confirmed',
@@ -232,6 +239,9 @@ class PaymentController extends Controller
                 $orderId = $payment['order_id'];
                 $stmt = $this->container->database()->getConnection()->prepare("UPDATE orders SET status = 'processing' WHERE order_id = ? AND status = 'pending'");
                 $stmt->execute([$orderId]);
+
+                // Auto-assign shipper after transfer payment is confirmed.
+                $this->autoAssignOrderAfterPaymentConfirmed($orderId);
 
                 return $res->json([
                     'RspCode' => '00',
@@ -545,6 +555,9 @@ class PaymentController extends Controller
             ");
             $stmt->execute([$orderId]);
 
+            // Auto-assign shipper after transfer payment is confirmed.
+            $this->autoAssignOrderAfterPaymentConfirmed($orderId);
+
             $db->commit();
             error_log("PayOS: Payment confirmed - order_id: {$orderId}, payment_id: {$payment['payment_id']}, reference: {$transactionId}");
             
@@ -627,6 +640,88 @@ class PaymentController extends Controller
                 return new PayOSPaymentService($pdo, $paymentModel, $payosConfig);
             default:
                 throw new Exception("Unknown payment method: {$method}");
+        }
+    }
+
+    private function autoAssignOrderAfterPaymentConfirmed(int $orderId): void
+    {
+        try {
+            $order = $this->orderModel->find($orderId);
+            if (!$order) {
+                return;
+            }
+
+            if (!in_array($order['status'], ['pending', 'processing'], true)) {
+                return;
+            }
+
+            $pdo = $this->container->database()->getConnection();
+
+            $trackingStmt = $pdo->prepare("SELECT shipper_id FROM shipping_tracking WHERE order_id = ? LIMIT 1");
+            $trackingStmt->execute([$orderId]);
+            $existingAssignment = $trackingStmt->fetch(PDO::FETCH_ASSOC);
+            if ($existingAssignment && !empty($existingAssignment['shipper_id'])) {
+                return;
+            }
+
+            $shipperSql = "
+                SELECT
+                    s.user_id,
+                    COUNT(CASE WHEN o.status IN ('processing', 'shipping') THEN 1 END) AS active_orders
+                FROM shippers s
+                LEFT JOIN shipping_tracking st ON st.shipper_id = s.user_id
+                LEFT JOIN orders o ON o.order_id = st.order_id
+                WHERE s.is_available = 1 AND s.status = 'active'
+                GROUP BY s.user_id, s.rating, s.on_time_delivery_pct
+                ORDER BY active_orders ASC, s.rating DESC, s.on_time_delivery_pct DESC
+                LIMIT 1
+            ";
+            $shipperStmt = $pdo->query($shipperSql);
+            $shipper = $shipperStmt ? $shipperStmt->fetch(PDO::FETCH_ASSOC) : null;
+            if (!$shipper || empty($shipper['user_id'])) {
+                return;
+            }
+
+            $shipperId = (int)$shipper['user_id'];
+            $assignedBy = 1;
+
+            $assigned = $this->orderModel->assignShipper($orderId, $shipperId, $assignedBy);
+            if (!$assigned) {
+                return;
+            }
+
+            if ($order['status'] === 'pending') {
+                $this->orderModel->updateStatus($orderId, 'processing', $assignedBy, 'Order auto-assigned after payment confirmed');
+            }
+
+            try {
+                $this->orderModel->forceShippingStatus(
+                    $orderId,
+                    'new_request',
+                    $shipperId,
+                    ['note' => 'Order auto-assigned after payment confirmed']
+                );
+            } catch (Exception $e) {
+                error_log('[PaymentController] Auto-assign force shipping status failed: ' . $e->getMessage());
+            }
+
+            try {
+                $notificationService = new NotificationService($pdo);
+                $notificationService->sendPushNotification(
+                    $shipperId,
+                    'Đơn hàng mới được gán',
+                    "Bạn có đơn hàng #{$orderId} mới cần xử lý",
+                    [
+                        'order_id' => $orderId,
+                        'type' => 'new_order_assigned'
+                    ],
+                    'new_order_assigned'
+                );
+            } catch (Exception $e) {
+                error_log('[PaymentController] Auto-assign push notification failed: ' . $e->getMessage());
+            }
+        } catch (Exception $e) {
+            error_log('[PaymentController] Auto-assign after payment confirmed failed: ' . $e->getMessage());
         }
     }
 }

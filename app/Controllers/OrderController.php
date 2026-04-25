@@ -376,6 +376,7 @@ class OrderController extends Controller
             
             // Create payment if payment_method is provided
             $paymentData = null;
+            $paymentMethod = !empty($data['payment_method']) ? strtolower((string)$data['payment_method']) : null;
             if (!empty($data['payment_method'])) {
                 try {
                     $database = $this->container->database();
@@ -395,6 +396,18 @@ class OrderController extends Controller
                     error_log("Error creating payment: " . $e->getMessage());
                     error_log("Error stack trace: " . $e->getTraceAsString());
                     // Don't fail order creation if payment creation fails
+                }
+            }
+
+            // Auto-assign shipper for non-transfer orders.
+            // Transfer methods (payos/vnpay/vietqr/mock_qr/...) will be auto-assigned
+            // after payment is confirmed in PaymentController callbacks.
+            if (!$this->shouldWaitForPaymentConfirmationBeforeAutoAssign($paymentMethod)) {
+                try {
+                    $this->autoAssignOrderToBestAvailableShipper($orderId, 1, 'Auto-assigned on order creation');
+                    $order = $this->orderModel->getByIdWithDetails($orderId);
+                } catch (Exception $e) {
+                    error_log('[OrderController] Auto-assign on creation failed: ' . $e->getMessage());
                 }
             }
             
@@ -1226,6 +1239,94 @@ class OrderController extends Controller
 
         error_log('[Shipping Workflow] ' . $e->getMessage());
         return $res->json(ResponseHelper::serverError('Shipping workflow failed: ' . $e->getMessage()));
+    }
+
+    private function shouldWaitForPaymentConfirmationBeforeAutoAssign(?string $paymentMethod): bool
+    {
+        if (!$paymentMethod) {
+            return false;
+        }
+
+        return $paymentMethod !== 'cod';
+    }
+
+    private function autoAssignOrderToBestAvailableShipper(int $orderId, int $assignedBy, string $note = 'Auto-assigned by system'): bool
+    {
+        $order = $this->orderModel->find($orderId);
+        if (!$order) {
+            return false;
+        }
+
+        if (!in_array($order['status'], ['pending', 'processing'], true)) {
+            return false;
+        }
+
+        $pdo = $this->container->database()->getConnection();
+
+        $trackingStmt = $pdo->prepare("SELECT shipper_id FROM shipping_tracking WHERE order_id = ? LIMIT 1");
+        $trackingStmt->execute([$orderId]);
+        $existingAssignment = $trackingStmt->fetch(PDO::FETCH_ASSOC);
+        if ($existingAssignment && !empty($existingAssignment['shipper_id'])) {
+            return true;
+        }
+
+        $shipperSql = "
+            SELECT
+                s.user_id,
+                COUNT(CASE WHEN o.status IN ('processing', 'shipping') THEN 1 END) AS active_orders
+            FROM shippers s
+            LEFT JOIN shipping_tracking st ON st.shipper_id = s.user_id
+            LEFT JOIN orders o ON o.order_id = st.order_id
+            WHERE s.is_available = 1 AND s.status = 'active'
+            GROUP BY s.user_id, s.rating, s.on_time_delivery_pct
+            ORDER BY active_orders ASC, s.rating DESC, s.on_time_delivery_pct DESC
+            LIMIT 1
+        ";
+        $shipperStmt = $pdo->query($shipperSql);
+        $shipper = $shipperStmt ? $shipperStmt->fetch(PDO::FETCH_ASSOC) : null;
+
+        if (!$shipper || empty($shipper['user_id'])) {
+            return false;
+        }
+
+        $shipperId = (int)$shipper['user_id'];
+        $result = $this->orderModel->assignShipper($orderId, $shipperId, $assignedBy);
+        if (!$result) {
+            return false;
+        }
+
+        if ($order['status'] === 'pending') {
+            $this->orderModel->updateStatus($orderId, 'processing', $assignedBy, $note);
+        }
+
+        try {
+            $this->orderModel->forceShippingStatus(
+                $orderId,
+                'new_request',
+                $shipperId,
+                ['note' => $note]
+            );
+        } catch (Exception $e) {
+            error_log('[OrderController] Auto-assign force shipping status failed: ' . $e->getMessage());
+        }
+
+        try {
+            $notificationService = new NotificationService($pdo);
+            $notificationService->sendPushNotification(
+                $shipperId,
+                'Đơn hàng mới được gán',
+                "Bạn có đơn hàng #{$orderId} mới cần xử lý",
+                [
+                    'order_id' => $orderId,
+                    'type' => 'new_order_assigned'
+                ],
+                'new_order_assigned'
+            );
+        } catch (Exception $e) {
+            error_log('[OrderController] Auto-assign push notification failed: ' . $e->getMessage());
+        }
+
+        return true;
     }
 
     /**
