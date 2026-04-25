@@ -1,7 +1,7 @@
 <?php
 declare(strict_types=1);
 
-use App\Controllers\{AddressController, AuthController, ProductController, ProductImageController, OrderController, AdminController, CategoryController, CustomerController, ShipperController, UserController, RoleController, InventoryController, InvoiceController, VoucherController, MessageController, ShippingController, CartController, SupplierController, PurchaseReceiptController, TrackingController, NotificationController, ContentController, ContentCategoryController, PaymentController, CollectionController, UserOrderController};
+use App\Controllers\{AddressController, AuthController, ProductController, ProductImageController, OrderController, AdminController, CategoryController, CustomerController, ShipperController, UserController, RoleController, InventoryController, InvoiceController, VoucherController, MessageController, ShippingController, CartController, SupplierController, PurchaseReceiptController, StockAdjustmentController, TrackingController, NotificationController, ContentController, ContentCategoryController, PaymentController, CollectionController, UserOrderController};
 use App\Middlewares\{AuthMiddleware, AdminMiddleware};
 
 // Debug test route
@@ -766,6 +766,22 @@ $router->post('/api/backend/v1/purchase-receipts', [PurchaseReceiptController::c
 $router->post('/api/backend/v1/purchase-receipts/confirm', [PurchaseReceiptController::class, 'confirm'], [new AuthMiddleware($container)]);
 $router->put('/api/backend/v1/purchase-receipts', [PurchaseReceiptController::class, 'update'], [new AuthMiddleware($container)]);
 $router->delete('/api/backend/v1/purchase-receipts', [PurchaseReceiptController::class, 'delete'], [new AuthMiddleware($container)]);
+
+// ========================================
+// STOCK ADJUSTMENT MANAGEMENT API ROUTES
+// ========================================
+$router->get('/api/v1/stock-adjustments', [StockAdjustmentController::class, 'index'], [new AuthMiddleware($container)]);
+$router->post('/api/v1/stock-adjustments', [StockAdjustmentController::class, 'store'], [new AuthMiddleware($container)]);
+$router->post('/api/v1/stock-adjustments/confirm', [StockAdjustmentController::class, 'confirm'], [new AuthMiddleware($container)]);
+$router->post('/api/v1/stock-adjustments/cancel', [StockAdjustmentController::class, 'cancel'], [new AuthMiddleware($container)]);
+$router->delete('/api/v1/stock-adjustments', [StockAdjustmentController::class, 'delete'], [new AuthMiddleware($container)]);
+
+// Backend API routes (for admin frontend)
+$router->get('/api/backend/v1/stock-adjustments', [StockAdjustmentController::class, 'index'], [new AuthMiddleware($container)]);
+$router->post('/api/backend/v1/stock-adjustments', [StockAdjustmentController::class, 'store'], [new AuthMiddleware($container)]);
+$router->post('/api/backend/v1/stock-adjustments/confirm', [StockAdjustmentController::class, 'confirm'], [new AuthMiddleware($container)]);
+$router->post('/api/backend/v1/stock-adjustments/cancel', [StockAdjustmentController::class, 'cancel'], [new AuthMiddleware($container)]);
+$router->delete('/api/backend/v1/stock-adjustments', [StockAdjustmentController::class, 'delete'], [new AuthMiddleware($container)]);
 
 // ========================================
 // ORDER TRACKING SYSTEM API ROUTES

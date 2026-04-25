@@ -93,6 +93,18 @@ class AdminController extends Controller
             $stmt->execute([$fromStr, $toStr]);
             $agg = $stmt->fetch(\PDO::FETCH_ASSOC) ?: ['c' => 0, 'rev' => 0];
 
+            // Chi phí nhập trong khoảng (chỉ phiếu đã xác nhận)
+            $stmt = $pdo->prepare("
+                SELECT COALESCE(SUM(pi.subtotal), 0) AS purchase_cost
+                FROM purchase_receipts pr
+                INNER JOIN purchase_items pi ON pr.receipt_id = pi.receipt_id
+                WHERE pr.status = 'confirmed'
+                  AND DATE(pr.updated_at) BETWEEN ? AND ?
+            ");
+            $stmt->execute([$fromStr, $toStr]);
+            $purchaseAgg = $stmt->fetch(\PDO::FETCH_ASSOC) ?: ['purchase_cost' => 0];
+            $totalPurchaseCost = (float) ($purchaseAgg['purchase_cost'] ?? 0);
+
             $stmt = $pdo->query('SELECT COUNT(*) AS c FROM products');
             $total_products = (int) ($stmt->fetch()['c'] ?? 0);
 
@@ -121,6 +133,32 @@ class AdminController extends Controller
                 $revenue_series[] = [
                     'date' => $key,
                     'revenue' => $byDay[$key] ?? 0.0,
+                ];
+                $cursor = $cursor->modify('+1 day');
+            }
+
+            // Chi phí nhập theo ngày trong khoảng (chỉ phiếu confirmed)
+            $stmt = $pdo->prepare("
+                SELECT DATE(pr.updated_at) AS d, COALESCE(SUM(pi.subtotal), 0) AS purchase_cost
+                FROM purchase_receipts pr
+                INNER JOIN purchase_items pi ON pr.receipt_id = pi.receipt_id
+                WHERE pr.status = 'confirmed'
+                  AND DATE(pr.updated_at) BETWEEN ? AND ?
+                GROUP BY DATE(pr.updated_at)
+            ");
+            $stmt->execute([$fromStr, $toStr]);
+            $costByDay = [];
+            foreach ($stmt->fetchAll(\PDO::FETCH_ASSOC) as $row) {
+                $costByDay[(string) $row['d']] = (float) $row['purchase_cost'];
+            }
+
+            $purchase_cost_series = [];
+            $cursor = new \DateTimeImmutable($fromStr);
+            while ($cursor <= $end) {
+                $key = $cursor->format('Y-m-d');
+                $purchase_cost_series[] = [
+                    'date' => $key,
+                    'purchase_cost' => $costByDay[$key] ?? 0.0,
                 ];
                 $cursor = $cursor->modify('+1 day');
             }
@@ -156,9 +194,52 @@ class AdminController extends Controller
                 ];
             }
 
+            // Top sản phẩm nhập nhiều trong khoảng (chỉ phiếu confirmed)
+            $stmt = $pdo->prepare("
+                SELECT
+                    p.product_id,
+                    p.product_name,
+                    SUM(pi.quantity) AS purchase_quantity,
+                    SUM(pi.subtotal) AS purchase_cost
+                FROM purchase_items pi
+                INNER JOIN purchase_receipts pr ON pi.receipt_id = pr.receipt_id
+                INNER JOIN product_variants pv ON pi.variant_id = pv.variant_id
+                INNER JOIN products p ON pv.product_id = p.product_id
+                WHERE pr.status = 'confirmed'
+                  AND DATE(pr.updated_at) BETWEEN ? AND ?
+                GROUP BY p.product_id, p.product_name
+                ORDER BY purchase_quantity DESC, purchase_cost DESC
+                LIMIT 5
+            ");
+            $stmt->execute([$topFromStr, $topToStr]);
+            $top_purchased_raw = $stmt->fetchAll(\PDO::FETCH_ASSOC);
+            $top_purchased_products = [];
+            foreach ($top_purchased_raw as $row) {
+                $top_purchased_products[] = [
+                    'product_id' => (int) $row['product_id'],
+                    'product_name' => (string) $row['product_name'],
+                    'purchase_quantity' => (int) $row['purchase_quantity'],
+                    'purchase_cost' => (float) $row['purchase_cost'],
+                ];
+            }
+
+            $bestSellingProduct = null;
+            if (!empty($top_products)) {
+                $bestSellingProduct = [
+                    'product_id' => (int) $top_products[0]['product_id'],
+                    'product_name' => (string) $top_products[0]['product_name'],
+                    'sales_count' => (int) $top_products[0]['sales_count'],
+                    'revenue' => (float) $top_products[0]['revenue'],
+                ];
+            }
+
+            $grossProfit = (float) ($agg['rev'] ?? 0) - $totalPurchaseCost;
+
             return $res->json(ResponseHelper::success([
                 'total_orders' => (int) ($agg['c'] ?? 0),
                 'total_revenue' => (float) ($agg['rev'] ?? 0),
+                'total_purchase_cost' => $totalPurchaseCost,
+                'gross_profit' => $grossProfit,
                 'total_products' => $total_products,
                 'total_users' => $total_users,
                 'date_from' => $fromStr,
@@ -166,7 +247,10 @@ class AdminController extends Controller
                 'top_date_from' => $topFromStr,
                 'top_date_to' => $topToStr,
                 'revenue_series' => $revenue_series,
+                'purchase_cost_series' => $purchase_cost_series,
                 'top_products' => $top_products,
+                'top_purchased_products' => $top_purchased_products,
+                'best_selling_product' => $bestSellingProduct,
             ], 'Dashboard data retrieved successfully'));
         } catch (Exception $e) {
             return $res->json(ResponseHelper::serverError('Failed to load dashboard: ' . $e->getMessage()));
