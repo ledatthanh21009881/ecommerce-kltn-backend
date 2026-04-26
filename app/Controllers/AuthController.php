@@ -221,6 +221,11 @@ class AuthController extends Controller
                 $this->refreshTokenModel->createToken($account['account_id'], $refreshToken);
             }
             
+            $locale = $account['preferred_locale'] ?? 'vi';
+            if (!in_array($locale, ['vi', 'en'], true)) {
+                $locale = 'vi';
+            }
+
             return $res->json(ResponseHelper::success([
                 'token' => $token,
                 'refresh_token' => $refreshToken,
@@ -228,7 +233,8 @@ class AuthController extends Controller
                     'account_id' => $account['account_id'],
                     'account_name' => $account['account_name'],
                     'account_type' => $account['account_type'],
-                    'role' => 'admin'
+                    'role' => 'admin',
+                    'preferred_locale' => $locale,
                 ],
                 'redirect' => '/admin/dashboard'
             ], 'Admin login successful'));
@@ -236,7 +242,41 @@ class AuthController extends Controller
         } catch (Exception $e) {
             return $res->json(ResponseHelper::serverError('Admin login failed: ' . $e->getMessage()));
         }
-    }    /**
+    }
+
+    /**
+     * PUT /api/v1/auth/admin/locale — lưu preferred_locale (vi|en) cho tài khoản admin.
+     */
+    public function updateAdminLocale(Request $req, Response $res): void
+    {
+        $payload = $req->getAttribute('user');
+        if (!is_array($payload) || !isset($payload['account_id'])) {
+            $res->json(ResponseHelper::unauthorized('Invalid token payload'));
+            return;
+        }
+
+        $data = $req->json();
+        $raw = $data['preferred_locale'] ?? '';
+        $loc = is_string($raw) ? $raw : (string) $raw;
+        if (!in_array($loc, ['vi', 'en'], true)) {
+            $res->json(ResponseHelper::badRequest('preferred_locale must be vi or en'));
+            return;
+        }
+
+        $accountId = (int) $payload['account_id'];
+        try {
+            $ok = $this->accountModel->update($accountId, ['preferred_locale' => $loc]);
+            if (!$ok) {
+                $res->json(ResponseHelper::serverError('Failed to update language preference'));
+                return;
+            }
+            $res->json(ResponseHelper::success(['preferred_locale' => $loc], 'Language saved'));
+        } catch (Exception $e) {
+            $res->json(ResponseHelper::serverError('Update failed: ' . $e->getMessage()));
+        }
+    }
+
+    /**
      * Check if current user is admin
      */
     public function checkAdminRole(Request $req, Response $res)

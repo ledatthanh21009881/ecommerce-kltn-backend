@@ -14,6 +14,7 @@ $router->get('/api/v1/test', function($req, $res) {
 // ========================================
 $router->post('/api/v1/auth/login', [AuthController::class, 'login']);
 $router->post('/api/v1/auth/admin/login', [AuthController::class, 'adminLogin']);
+$router->put('/api/v1/auth/admin/locale', [AuthController::class, 'updateAdminLocale'], [new AdminMiddleware($container)]);
 $router->post('/api/v1/auth/register', [AuthController::class, 'register']);
 $router->post('/api/v1/auth/logout', [AuthController::class, 'logout'], [new AuthMiddleware($container)]);
 $router->post('/api/v1/auth/refresh', [AuthController::class, 'refresh'], [new AuthMiddleware($container)]);

@@ -26,12 +26,17 @@ class SiteSettingsController extends Controller
         'branding.favicon_url' => '/icon.png',
     ];
 
+    /**
+     * Bật/tắt theo từng kênh/loại mà hệ thống thực sự có (chuông admin, email hóa đơn, cảnh báo tồn).
+     * Khóa cũ (email_notifications, …) vẫn đọc được qua normalizeNotificationSettings().
+     */
     private const NOTIFICATION_DEFAULTS = [
-        'email_notifications' => true,
-        'sms_notifications' => false,
-        'order_confirmation' => true,
-        'shipping_updates' => true,
+        'admin_notify_new_order' => true,
+        'admin_notify_payment' => true,
+        'admin_notify_order_assigned' => true,
+        'email_invoice' => true,
         'low_stock_alerts' => true,
+        'low_stock_threshold' => 5,
     ];
 
     private const NOTIFICATION_KEY = 'admin.notification_settings';
@@ -94,7 +99,7 @@ class SiteSettingsController extends Controller
             if (!empty($map[self::NOTIFICATION_KEY])) {
                 $decoded = json_decode((string) $map[self::NOTIFICATION_KEY], true);
                 if (is_array($decoded)) {
-                    $notifications = array_merge($notifications, $decoded);
+                    $notifications = $this->normalizeNotificationSettings($decoded);
                 }
             }
 
@@ -181,12 +186,9 @@ class SiteSettingsController extends Controller
             $this->upsertString($pdo, 'branding.primary_color', $this->colorHex($this->str($appearance, 'primary_color', 20)), 'string', 0, $updatedBy);
             $this->upsertString($pdo, 'branding.favicon_url', $this->str($appearance, 'favicon_url', 2000), 'string', 1, $updatedBy);
 
-            $notifPayload = self::NOTIFICATION_DEFAULTS;
-            foreach (array_keys(self::NOTIFICATION_DEFAULTS) as $k) {
-                if (array_key_exists($k, $notifications)) {
-                    $notifPayload[$k] = (bool) $notifications[$k];
-                }
-            }
+            $notifPayload = $this->normalizeNotificationSettings(
+                is_array($notifications) ? $notifications : []
+            );
             $this->upsertString(
                 $pdo,
                 self::NOTIFICATION_KEY,
@@ -340,5 +342,32 @@ class SiteSettingsController extends Controller
             return $v;
         }
         throw new \InvalidArgumentException('Invalid primary color (use #RRGGBB)');
+    }
+
+    /**
+     * @param array<string, mixed> $raw
+     * @return array<string, bool|int>
+     */
+    private function normalizeNotificationSettings(array $raw): array
+    {
+        $out = self::NOTIFICATION_DEFAULTS;
+        foreach (array_keys(self::NOTIFICATION_DEFAULTS) as $k) {
+            if (array_key_exists($k, $raw)) {
+                if ($k === 'low_stock_threshold') {
+                    $out[$k] = max(0, min(999999, (int) $raw[$k]));
+                } else {
+                    $out[$k] = (bool) $raw[$k];
+                }
+            }
+        }
+        if (!array_key_exists('email_invoice', $raw)) {
+            if (array_key_exists('order_confirmation', $raw)) {
+                $out['email_invoice'] = (bool) $raw['order_confirmation'];
+            } elseif (array_key_exists('email_notifications', $raw)) {
+                $out['email_invoice'] = (bool) $raw['email_notifications'];
+            }
+        }
+
+        return $out;
     }
 }

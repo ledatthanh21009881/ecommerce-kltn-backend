@@ -16,7 +16,8 @@ class Account extends Model
         'account_type',
         'two_fa_enabled',
         'two_fa_secret',
-        'is_active'
+        'is_active',
+        'preferred_locale',
     ];
     
     protected array $hidden = [
