@@ -41,6 +41,42 @@ class Request
         if ($key === null) return $_GET; 
         return $_GET[$key] ?? $default; 
     }
+
+    /** @return array<string, mixed> */
+    public function getQueryParams(): array
+    {
+        $q = $this->query();
+        return is_array($q) ? $q : [];
+    }
+
+    public function getPathParam(string $name): ?string
+    {
+        $v = $this->getAttribute($name);
+        if ($v === null) {
+            return null;
+        }
+        return is_scalar($v) ? (string) $v : null;
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    public function getBody(): array
+    {
+        $contentType = $this->header('Content-Type') ?? '';
+        if (str_contains(strtolower($contentType), 'application/json')) {
+            return $this->json();
+        }
+        if (!empty($_POST)) {
+            return $_POST;
+        }
+        $raw = file_get_contents('php://input') ?: '';
+        if ($raw === '') {
+            return [];
+        }
+        $data = json_decode($raw, true);
+        return is_array($data) ? $data : [];
+    }
     
     public function body(): array 
     { 

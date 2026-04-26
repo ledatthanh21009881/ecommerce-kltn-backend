@@ -10,10 +10,14 @@ use Ratchet\WebSocket\WsServer;
 
 class WebSocketService implements MessageComponentInterface
 {
+    private const ADMIN_QUEUE_FILE = 'admin_notification_broadcast_queue.json';
+
     protected $clients;
     protected $userConnections;
     protected $clientConversations; // Add this to store conversations for each client
     protected $clientPayments; // Store payment rooms for each client
+    /** @var \SplObjectStorage<ConnectionInterface, int> Kết nối admin đã join kênh thông báo */
+    protected $adminNotifSubscribers;
 
     public function __construct()
     {
@@ -21,12 +25,14 @@ class WebSocketService implements MessageComponentInterface
         $this->userConnections = [];
         $this->clientConversations = []; // Initialize conversations storage
         $this->clientPayments = []; // Initialize payments storage
+        $this->adminNotifSubscribers = new \SplObjectStorage;
     }
 
     public function onOpen(ConnectionInterface $conn)
     {
         $this->clients->attach($conn);
         error_log("New connection! ({$conn->resourceId})");
+        $this->drainAdminNotificationQueue();
     }
 
     public function onMessage(ConnectionInterface $from, $msg)
@@ -106,13 +112,23 @@ class WebSocketService implements MessageComponentInterface
                     $this->leavePaymentRoom($from, $paymentId);
                 }
                 break;
+            case 'join_admin_notifications':
+                $this->joinAdminNotifications($from);
+                break;
+            case 'leave_admin_notifications':
+                $this->leaveAdminNotifications($from);
+                break;
         }
+        $this->drainAdminNotificationQueue();
     }
 
     public function onClose(ConnectionInterface $conn)
     {
         $this->clients->detach($conn);
         $this->removeUserConnection($conn);
+        if ($this->adminNotifSubscribers->contains($conn)) {
+            $this->adminNotifSubscribers->detach($conn);
+        }
         
         // Clean up conversations and payments for this client
         $clientId = $conn->resourceId;
@@ -147,15 +163,124 @@ class WebSocketService implements MessageComponentInterface
             $jwtSecret = $config['app']['jwt']['secret'] ?? 'your-secret-key-here';
             
             $decoded = \Firebase\JWT\JWT::decode($token, new \Firebase\JWT\Key($jwtSecret, 'HS256'));
-            $userId = $decoded->account_id;
+            $userId = $decoded->account_id ?? $decoded->user_id ?? null;
+            $roles = isset($decoded->roles) ? (array) $decoded->roles : [];
+            $isAdmin = !empty($decoded->is_admin) || in_array('admin', $roles, true);
             
-            $this->userConnections[$userId] = $conn;
+            if ($userId !== null) {
+                $this->userConnections[$userId] = $conn;
+            }
             $conn->userId = $userId;
+            $conn->isAdmin = $isAdmin;
             
-            error_log("User {$userId} authenticated");
+            error_log("User {$userId} authenticated (admin=" . ($isAdmin ? '1' : '0') . ')');
         } catch (\Exception $e) {
             error_log("Authentication failed: {$e->getMessage()}");
         }
+    }
+
+    protected function joinAdminNotifications(ConnectionInterface $conn): void
+    {
+        if (empty($conn->userId) || empty($conn->isAdmin)) {
+            error_log('join_admin_notifications: denied (not admin or not authenticated)');
+            $conn->send(json_encode([
+                'type' => 'error',
+                'event' => 'admin_notifications',
+                'message' => 'Admin only',
+            ]));
+            return;
+        }
+        if (!$this->adminNotifSubscribers->contains($conn)) {
+            $this->adminNotifSubscribers->attach($conn, 1);
+        }
+        error_log("Client {$conn->resourceId} joined admin notification channel");
+        $conn->send(json_encode([
+            'type' => 'subscribed',
+            'event' => 'admin_notifications',
+        ]));
+    }
+
+    protected function leaveAdminNotifications(ConnectionInterface $conn): void
+    {
+        if ($this->adminNotifSubscribers->contains($conn)) {
+            $this->adminNotifSubscribers->detach($conn);
+        }
+    }
+
+    /**
+     * Gọi từ PHP HTTP (FPM) — đẩy job vào file; process Ratchet sẽ gửi tới client.
+     */
+    public static function getAdminNotificationQueuePath(): string
+    {
+        return dirname(__DIR__, 2) . '/' . self::ADMIN_QUEUE_FILE;
+    }
+
+    /**
+     * Gửi payload cho mọi client đã join kênh admin.
+     */
+    public function broadcastAdminNotification(array $notification): int
+    {
+        $envelope = [
+            'type' => 'admin_notification',
+            'event' => 'admin_notification',
+            'payload' => $notification,
+        ];
+        $json = json_encode($envelope, JSON_UNESCAPED_UNICODE);
+        $sent = 0;
+        foreach ($this->adminNotifSubscribers as $client) {
+            $client->send($json);
+            $sent++;
+        }
+        if ($sent > 0) {
+            error_log("Broadcast admin_notification to {$sent} admin WS client(s)");
+        }
+        return $sent;
+    }
+
+    /**
+     * Đọc hàng đợi từ file (do AdminNotificationService ghi từ HTTP) và push tới client.
+     */
+    public function drainAdminNotificationQueue(): void
+    {
+        $path = self::getAdminNotificationQueuePath();
+        if (!is_file($path) || !is_readable($path)) {
+            return;
+        }
+        if ($this->adminNotifSubscribers->count() === 0) {
+            return;
+        }
+        $fp = fopen($path, 'c+');
+        if (!$fp) {
+            return;
+        }
+        if (!flock($fp, LOCK_EX | LOCK_NB)) {
+            fclose($fp);
+            return;
+        }
+        $raw = stream_get_contents($fp);
+        if ($raw === false || $raw === '') {
+            flock($fp, LOCK_UN);
+            fclose($fp);
+            return;
+        }
+        $queue = json_decode($raw, true);
+        if (!is_array($queue) || $queue === []) {
+            ftruncate($fp, 0);
+            fflush($fp);
+            flock($fp, LOCK_UN);
+            fclose($fp);
+            return;
+        }
+        foreach ($queue as $item) {
+            if (!is_array($item) || !isset($item['payload']) || !is_array($item['payload'])) {
+                continue;
+            }
+            $this->broadcastAdminNotification($item['payload']);
+        }
+        ftruncate($fp, 0);
+        fflush($fp);
+        flock($fp, LOCK_UN);
+        fclose($fp);
     }
 
     protected function joinConversation($conn, $conversationId)

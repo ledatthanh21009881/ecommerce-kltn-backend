@@ -24,4 +24,9 @@ $server = IoServer::factory(
 );
 
 echo "WebSocket server is running on ws://localhost:8080\n";
+
+$server->loop->addPeriodicTimer(1.0, function () use ($webSocketService) {
+    $webSocketService->drainAdminNotificationQueue();
+});
+
 $server->run();

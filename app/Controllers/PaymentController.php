@@ -8,11 +8,13 @@ use App\Core\{Controller, Request, Response, Container};
 use App\Domain\Orders\Order;
 use App\Domain\Payments\Payment;
 use App\Services\Payment\{MockQRPaymentService, VNPayPaymentService, VietQRPaymentService, CODPaymentService, PayOSPaymentService};
+use App\Services\AdminNotificationService;
 use App\Services\NotificationService;
 use App\Support\ResponseHelper;
 use App\Core\Validator;
 use Exception;
 use PDO;
+use Throwable;
 
 class PaymentController extends Controller
 {
@@ -122,6 +124,10 @@ class PaymentController extends Controller
                 'amount' => $data['amount'],
             ]);
 
+            if (($paymentData['status'] ?? '') === 'pending' && !empty($paymentData['payment_id'])) {
+                $this->notifyAdminPaymentPending((int) $data['order_id'], (int) $paymentData['payment_id'], (string) ($paymentData['method'] ?? 'online'));
+            }
+
             return $res->json(ResponseHelper::success($paymentData));
 
         } catch (Exception $e) {
@@ -167,6 +173,7 @@ class PaymentController extends Controller
 
             // Auto-assign shipper after transfer payment is confirmed.
             $this->autoAssignOrderAfterPaymentConfirmed($orderId);
+            $this->notifyAdminPaymentConfirmed($orderId, $paymentId);
 
             return $res->json(ResponseHelper::success([
                 'payment_id' => $paymentId,
@@ -242,6 +249,7 @@ class PaymentController extends Controller
 
                 // Auto-assign shipper after transfer payment is confirmed.
                 $this->autoAssignOrderAfterPaymentConfirmed($orderId);
+                $this->notifyAdminPaymentConfirmed($orderId, $paymentId);
 
                 return $res->json([
                     'RspCode' => '00',
@@ -281,29 +289,6 @@ class PaymentController extends Controller
             $paymentId = (int) $req->getAttribute('id');
 
             $payment = $this->paymentModel->getByPaymentId($paymentId);
-            // #region agent log
-            try {
-                $logPath = __DIR__ . '/../../.cursor/debug-e7f3bb.log';
-                @mkdir(dirname($logPath), 0777, true);
-                @file_put_contents($logPath, json_encode([
-                    'sessionId' => 'e7f3bb',
-                    'runId' => 'pre-fix',
-                    'hypothesisId' => 'H5',
-                    'location' => 'ecommerce/app/Controllers/PaymentController.php:getStatus',
-                    'message' => 'Fetched payment record for status',
-                    'data' => [
-                        'paymentId' => $paymentId,
-                        'payment_exists' => (bool)$payment,
-                        'method' => is_array($payment) ? ($payment['method'] ?? null) : null,
-                        'status' => is_array($payment) ? ($payment['status'] ?? null) : null,
-                        'order_id' => is_array($payment) ? ($payment['order_id'] ?? null) : null,
-                    ],
-                    'timestamp' => round(microtime(true) * 1000),
-                ]) . "\n", FILE_APPEND);
-            } catch (\Throwable $e) {
-                // ignore logging errors
-            }
-            // #endregion
             if (!$payment) {
                 return $res->json(ResponseHelper::notFound('Payment not found'));
             }
@@ -344,11 +329,6 @@ class PaymentController extends Controller
                 
                 // 🔄 AUTO-CHECK: If payment is still pending, automatically check Casso API
                 if ($payment['status'] === 'pending') {
-                    // #region agent log (commented out)
-                    // $debugLogPath = __DIR__ . '/../../.cursor/debug.log';
-                    // @mkdir(dirname($debugLogPath), 0777, true);
-                    // file_put_contents($debugLogPath, json_encode(['hypothesisId'=>'H1','location'=>'PaymentController:getStatus','message'=>'AUTO-CHECK CALLED','data'=>['orderId'=>$orderId,'paymentId'=>$paymentId,'cassoConfig_keys'=>array_keys($cassoConfig),'api_key_set'=>!empty($cassoConfig['api_key']),'api_key_length'=>strlen($cassoConfig['api_key'] ?? ''),'env_api_key_set'=>!empty($_ENV['CASSO_API_KEY'])],'timestamp'=>round(microtime(true)*1000),'sessionId'=>'debug-session'])."\n", FILE_APPEND);
-                    // #endregion
                     error_log("🔄 [Payment Status] Payment is pending, auto-checking Casso API for order {$orderId}...");
                     
                     try {
@@ -357,6 +337,7 @@ class PaymentController extends Controller
                             error_log("✅ [Payment Status] Payment confirmed via auto-check!");
                             // Refresh payment data
                             $payment = $this->paymentModel->getByPaymentId($paymentId);
+                            $this->notifyAdminPaymentConfirmed($orderId, (int) $paymentId);
                         }
                     } catch (\Exception $e) {
                         error_log("⚠️ [Payment Status] Auto-check error: " . $e->getMessage());
@@ -559,6 +540,7 @@ class PaymentController extends Controller
             $this->autoAssignOrderAfterPaymentConfirmed($orderId);
 
             $db->commit();
+            $this->notifyAdminPaymentConfirmed($orderId, (int) $payment['payment_id']);
             error_log("PayOS: Payment confirmed - order_id: {$orderId}, payment_id: {$payment['payment_id']}, reference: {$transactionId}");
             
             // Broadcast payment update via WebSocket
@@ -643,6 +625,26 @@ class PaymentController extends Controller
         }
     }
 
+    private function notifyAdminPaymentPending(int $orderId, int $paymentId, string $method): void
+    {
+        try {
+            (new AdminNotificationService($this->container->database()->getConnection()))
+                ->notifyPaymentPending($orderId, $method);
+        } catch (Throwable $e) {
+            error_log('[PaymentController] Admin payment pending notification: ' . $e->getMessage());
+        }
+    }
+
+    private function notifyAdminPaymentConfirmed(int $orderId, int $paymentId): void
+    {
+        try {
+            (new AdminNotificationService($this->container->database()->getConnection()))
+                ->notifyPaymentConfirmed($orderId, $paymentId);
+        } catch (Throwable $e) {
+            error_log('[PaymentController] Admin payment confirmed notification: ' . $e->getMessage());
+        }
+    }
+
     private function autoAssignOrderAfterPaymentConfirmed(int $orderId): void
     {
         try {
@@ -719,6 +721,12 @@ class PaymentController extends Controller
                 );
             } catch (Exception $e) {
                 error_log('[PaymentController] Auto-assign push notification failed: ' . $e->getMessage());
+            }
+
+            try {
+                (new AdminNotificationService($pdo))->notifyOrderAssigned($orderId, $shipperId);
+            } catch (Throwable $e) {
+                error_log('[PaymentController] Admin order-assigned notification: ' . $e->getMessage());
             }
         } catch (Exception $e) {
             error_log('[PaymentController] Auto-assign after payment confirmed failed: ' . $e->getMessage());

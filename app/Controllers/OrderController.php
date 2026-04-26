@@ -9,6 +9,7 @@ use App\Domain\Payments\Payment;
 use App\Services\Payment\{MockQRPaymentService, VNPayPaymentService, VietQRPaymentService, CODPaymentService, PayOSPaymentService};
 use App\Support\ResponseHelper;
 use App\Core\Validator;
+use App\Services\AdminNotificationService;
 use App\Services\NotificationService;
 use Exception;
 use PDO;
@@ -428,6 +429,17 @@ class OrderController extends Controller
                 error_log("Error sending invoice email: " . $e->getMessage());
                 // Không throw exception để không ảnh hưởng đến việc tạo đơn hàng
             }
+
+            try {
+                $adminNotify = new AdminNotificationService($this->container->database()->getConnection());
+                $adminNotify->notifyNewOrder($orderId, (float) $totalAmount);
+                if (!empty($paymentData) && ($paymentData['status'] ?? '') === 'pending') {
+                    $methodLabel = (string) ($paymentData['method'] ?? 'online');
+                    $adminNotify->notifyPaymentPending($orderId, $methodLabel);
+                }
+            } catch (Exception $e) {
+                error_log('[OrderController] Admin notification: ' . $e->getMessage());
+            }
             
             return $res->json(ResponseHelper::success($order, 'Order created successfully'));
             
@@ -702,6 +714,15 @@ class OrderController extends Controller
             } catch (Exception $e) {
                 // Log error but don't fail the assignment
                 error_log('[OrderController] Error sending push notification: ' . $e->getMessage());
+            }
+
+            try {
+                (new AdminNotificationService($this->container->database()->getConnection()))->notifyOrderAssigned(
+                    $id,
+                    (int) $data['shipper_id']
+                );
+            } catch (Exception $e) {
+                error_log('[OrderController] Admin shipper notification: ' . $e->getMessage());
             }
             
             $message = $existingAssignment && isset($oldShipperId) && $oldShipperId !== (int)$data['shipper_id']
@@ -1324,6 +1345,12 @@ class OrderController extends Controller
             );
         } catch (Exception $e) {
             error_log('[OrderController] Auto-assign push notification failed: ' . $e->getMessage());
+        }
+
+        try {
+            (new AdminNotificationService($pdo))->notifyOrderAssigned($orderId, $shipperId);
+        } catch (Exception $e) {
+            error_log('[OrderController] Admin shipper notification: ' . $e->getMessage());
         }
 
         return true;
