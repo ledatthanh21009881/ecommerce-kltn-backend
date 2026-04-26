@@ -131,7 +131,7 @@ class InvoiceController extends Controller
         
         // Nội dung 2 cột
         $pdf->SetFont('Arial', 'B', 10);
-        $pdf->Cell(95, 6, 'Tên: ShopSwift E-commerce', 1, 0);
+        $pdf->Cell(95, 6, 'Tên: VIVIENNE E-commerce', 1, 0);
         $pdf->Cell(95, 6, 'Tên: ' . $order['first_name'] . ' ' . $order['last_name'], 1, 1);
         
         $pdf->SetFont('Arial', '', 9);
@@ -238,7 +238,7 @@ class InvoiceController extends Controller
         $pdf->Ln(10);
         $pdf->SetFont('Arial', 'I', 9);
         $pdf->SetTextColor(128, 128, 128);
-        $pdf->Cell(0, 5, 'Cảm ơn quý khách đã mua hàng tại ShopSwift!', 0, 1, 'C');
+        $pdf->Cell(0, 5, 'Cảm ơn quý khách đã mua hàng tại VIVIENNE!', 0, 1, 'C');
         $pdf->Cell(0, 5, 'Hóa đơn này được tạo tự động bởi hệ thống.', 0, 1, 'C');
 
         // Lưu file
@@ -313,11 +313,11 @@ class InvoiceController extends Controller
     private function getInvoiceEmailTemplate(array $order): string
     {
         return "
-        <h2>Cảm ơn bạn đã mua hàng tại ShopSwift!</h2>
+        <h2>Cảm ơn bạn đã mua hàng tại VIVIENNE!</h2>
         <p>Đơn hàng #{$order['invoice_number']} của bạn đã được xử lý thành công.</p>
         <p>Tổng thanh toán: " . number_format((float)$order['total_amount'], 0, ',', '.') . " ₫</p>
         <p>Hóa đơn được đính kèm trong email này.</p>
-        <p>Trân trọng,<br>ShopSwift Team</p>
+        <p>Trân trọng,<br>VIVIENNE Team</p>
         ";
     }
 

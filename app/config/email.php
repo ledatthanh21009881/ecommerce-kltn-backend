@@ -7,6 +7,6 @@ return [
     'smtp_password' => 'jrwxhenrswtqcggr', // App Password của bạn
     'smtp_secure' => 'tls',
     'from_email' => 'thanhle02032003@gmail.com',
-    'from_name' => 'ShopSwift System',
+    'from_name' => 'VIVIENNE System',
     'reply_to' => 'thanhle02032003@gmail.com'
 ];

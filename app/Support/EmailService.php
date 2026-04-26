@@ -21,7 +21,7 @@ class EmailService
         $this->smtpUsername = $_ENV['SMTP_USERNAME'] ?? 'thanhle02032003@gmail.com';
         $this->smtpPassword = $_ENV['SMTP_PASSWORD'] ?? 'tobg ofxi kkcs tscv';
         $this->fromEmail = $_ENV['FROM_EMAIL'] ?? 'thanhle02032003@gmail.com';
-        $this->fromName = $_ENV['FROM_NAME'] ?? 'ShopSwift';
+        $this->fromName = $_ENV['FROM_NAME'] ?? 'VIVIENNE';
     }
 
     /**
@@ -200,7 +200,7 @@ class EmailService
             file_put_contents($filepath, $pdfContent);
             
             // Gửi email với file đính kèm
-            $subject = 'Hóa đơn đơn hàng #' . $order['invoice_number'] . ' - ShopSwift';
+            $subject = 'Hóa đơn đơn hàng #' . $order['invoice_number'] . ' - VIVIENNE';
             $body = $this->getInvoiceEmailTemplate($order);
             
             $result = $this->sendWithAttachment($to, $subject, $body, $filepath, $filename);
@@ -225,7 +225,7 @@ class EmailService
     {
         return "
         <div style='font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;'>
-            <h2 style='color: #333;'>Cảm ơn bạn đã đặt hàng tại ShopSwift!</h2>
+            <h2 style='color: #333;'>Cảm ơn bạn đã đặt hàng tại VIVIENNE!</h2>
             
             <div style='background: #f9f9f9; padding: 20px; border-radius: 5px; margin: 20px 0;'>
                 <h3 style='color: #666; margin-top: 0;'>Thông tin đơn hàng</h3>
@@ -241,7 +241,7 @@ class EmailService
             <div style='margin-top: 30px; padding-top: 20px; border-top: 1px solid #eee;'>
                 <p style='color: #666; font-size: 14px;'>
                     Trân trọng,<br>
-                    <strong>ShopSwift Team</strong>
+                    <strong>VIVIENNE Team</strong>
                 </p>
             </div>
         </div>
@@ -253,7 +253,7 @@ class EmailService
      */
     public function sendPasswordResetLinkEmail(string $to, string $accountName, string $resetLink): bool
     {
-        $subject = 'Reset Password - ShopSwift';
+        $subject = 'Reset Password - VIVIENNE';
         $body = $this->getPasswordResetLinkTemplate($accountName, $resetLink);
         
         return $this->send($to, $subject, $body);
@@ -284,7 +284,7 @@ class EmailService
             <p>This link will expire in 1 hour.</p>
             <p>If you didn't request this password reset, please ignore this email.</p>
             <br>
-            <p>Best regards,<br>ShopSwift Team</p>
+            <p>Best regards,<br>VIVIENNE Team</p>
         </body>
         </html>
         ";
@@ -295,7 +295,7 @@ class EmailService
      */
     public function sendPasswordResetEmail(string $to, string $newPassword): bool
     {
-        $subject = 'Mật khẩu mới - ShopSwift';
+        $subject = 'Mật khẩu mới - VIVIENNE';
         $body = $this->getPasswordResetTemplate($newPassword);
         
         return $this->send($to, $subject, $body);
@@ -315,7 +315,7 @@ class EmailService
             
             <p>Xin chào {$customerName},</p>
             
-            <p>Cảm ơn bạn đã đặt hàng tại ShopSwift! Dưới đây là hóa đơn chi tiết cho đơn hàng của bạn.</p>
+            <p>Cảm ơn bạn đã đặt hàng tại VIVIENNE! Dưới đây là hóa đơn chi tiết cho đơn hàng của bạn.</p>
             
             <div style='background: #f9f9f9; padding: 20px; border-radius: 5px; margin: 20px 0;'>
                 <h3 style='color: #666; margin-top: 0;'>Thông tin đơn hàng</h3>
@@ -332,7 +332,7 @@ class EmailService
             <div style='margin-top: 30px; padding-top: 20px; border-top: 1px solid #eee;'>
                 <p style='color: #666; font-size: 14px;'>
                     Trân trọng,<br>
-                    <strong>ShopSwift Team</strong>
+                    <strong>VIVIENNE Team</strong>
                 </p>
             </div>
         </div>
@@ -357,7 +357,7 @@ class EmailService
             <div style='margin-top: 30px; padding-top: 20px; border-top: 1px solid #eee;'>
                 <p style='color: #666; font-size: 14px;'>
                     Trân trọng,<br>
-                    <strong>ShopSwift Team</strong>
+                    <strong>VIVIENNE Team</strong>
                 </p>
             </div>
         </div>
@@ -369,7 +369,7 @@ class EmailService
      */
     public function sendOTPEmail(string $to, string $accountName, string $otpCode): bool
     {
-        $subject = 'Mã xác nhận đặt lại mật khẩu - ShopSwift';
+        $subject = 'Mã xác nhận đặt lại mật khẩu - VIVIENNE';
         $body = $this->getOTPEmailTemplate($accountName, $otpCode);
         
         return $this->send($to, $subject, $body);
@@ -387,7 +387,7 @@ class EmailService
         </head>
         <body style='font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;'>
             <div style='background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 30px; border-radius: 10px 10px 0 0; text-align: center;'>
-                <h1 style='color: white; margin: 0;'>ShopSwift</h1>
+                <h1 style='color: white; margin: 0;'>VIVIENNE</h1>
             </div>
             
             <div style='background: #ffffff; padding: 30px; border: 1px solid #e0e0e0; border-top: none; border-radius: 0 0 10px 10px;'>
@@ -415,7 +415,7 @@ class EmailService
             <div style='text-align: center; margin-top: 20px; padding-top: 20px; border-top: 1px solid #e0e0e0;'>
                 <p style='color: #999; font-size: 12px; margin: 0;'>
                     Trân trọng,<br>
-                    <strong style='color: #667eea;'>ShopSwift Team</strong>
+                    <strong style='color: #667eea;'>VIVIENNE Team</strong>
                 </p>
                 <p style='color: #999; font-size: 11px; margin-top: 10px;'>
                     Email này được gửi tự động, vui lòng không trả lời.

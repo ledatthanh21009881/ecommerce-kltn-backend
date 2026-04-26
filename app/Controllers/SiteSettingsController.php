@@ -14,9 +14,9 @@ use PDO;
 class SiteSettingsController extends Controller
 {
     private const DEFAULTS = [
-        'store.site_name' => 'ShopSwift',
+        'store.site_name' => 'VIVIENNE',
         'store.site_description' => 'Your premium fashion destination',
-        'store.contact_email' => 'contact@shopswift.com',
+        'store.contact_email' => 'contact@vivienne.com',
         'store.contact_phone' => '+84 123 456 789',
         'store.address' => '123 Fashion Street, District 1, Ho Chi Minh City',
         'store.timezone' => 'Asia/Ho_Chi_Minh',

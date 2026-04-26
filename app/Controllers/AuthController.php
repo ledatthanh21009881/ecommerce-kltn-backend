@@ -517,6 +517,24 @@ class AuthController extends Controller
     }
     
     /**
+     * True if the account/role is allowed to use the admin area (for admin-only reset link).
+     */
+    private function isAdminAccountForReset(array $user, array $account): bool
+    {
+        if (isset($account['account_type']) && $account['account_type'] === 'admin') {
+            return true;
+        }
+        $pdo = $this->container->database()->getConnection();
+        $stmt = $pdo->prepare(
+            'SELECT 1 FROM user_roles ur
+             JOIN roles r ON ur.role_id = r.role_id
+             WHERE ur.user_id = ? AND r.role_name = ? LIMIT 1'
+        );
+        $stmt->execute([(int) $user['user_id'], 'admin']);
+        return (bool) $stmt->fetchColumn();
+    }
+
+    /**
      * Forgot Password - Generate new password and send via email
      */
     public function forgotPassword(Request $req, Response $res)
@@ -533,19 +551,39 @@ class AuthController extends Controller
         }
         
         try {
+            $wantsAdminFlow = !empty($data['for_admin']);
+
             // Find user by email
             $user = $this->userModel->findByEmail($data['email']);
             
             if (!$user) {
-                // Don't reveal if email exists or not for security
-                return $res->json(ResponseHelper::success(null, 'If the email exists, a password reset link has been sent.'));
+                return $res->json([
+                    'success' => false,
+                    'message' => 'This email is not registered.',
+                    'error_code' => 'EMAIL_NOT_REGISTERED',
+                    'status_code' => 404,
+                ], 404);
             }
             
             // Get account info
             $account = $this->accountModel->find($user['account_id']);
             
             if (!$account) {
-                return $res->json(ResponseHelper::success(null, 'If the email exists, a password reset link has been sent.'));
+                return $res->json([
+                    'success' => false,
+                    'message' => 'This email is not registered.',
+                    'error_code' => 'EMAIL_NOT_REGISTERED',
+                    'status_code' => 404,
+                ], 404);
+            }
+
+            if ($wantsAdminFlow && !$this->isAdminAccountForReset($user, $account)) {
+                return $res->json([
+                    'success' => false,
+                    'message' => 'This email is not linked to an admin account.',
+                    'error_code' => 'NOT_ADMIN_FOR_RESET',
+                    'status_code' => 404,
+                ], 404);
             }
             
             // Generate reset token
@@ -556,9 +594,11 @@ class AuthController extends Controller
             $stmt = $pdo->prepare("UPDATE accounts SET password_reset_token = ?, reset_token_expires_at = DATE_ADD(NOW(), INTERVAL 1 HOUR) WHERE account_id = ?");
             $stmt->execute([$resetToken, $account['account_id']]);
             
-            // Create reset link (normalized to avoid malformed spaces in email clients)
+            // Create reset link (admin flow uses /admin-reset-password, storefront uses /reset-password)
             $frontendBaseUrl = rtrim($_ENV['PAYOS_BASE_URL'] ?? 'http://localhost:3000', '/');
-            $resetLink = $frontendBaseUrl . '/reset-password?' . http_build_query([
+            $isAdmin = $this->isAdminAccountForReset($user, $account);
+            $resetPath = ($wantsAdminFlow && $isAdmin) ? '/admin-reset-password' : '/reset-password';
+            $resetLink = $frontendBaseUrl . $resetPath . '?' . http_build_query([
                 'token' => trim($resetToken),
             ]);
             

@@ -4,7 +4,7 @@ declare(strict_types=1);
 // Web Routes for Basic Web Interface
 $router->get('/', function($req, $res) {
     $res->json([
-        'name' => 'ShopSwift Ecommerce API',
+        'name' => 'VIVIENNE Ecommerce API',
         'version' => '1.0.0',
         'status' => 'running',
         'endpoints' => [

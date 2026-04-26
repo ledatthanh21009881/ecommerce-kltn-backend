@@ -161,11 +161,11 @@ class InvoiceService
         </head>
         <body>
             <div class="header">
-                <div class="company-name">ShopSwift</div>
+                <div class="company-name">VIVIENNE</div>
                 <div class="company-info">
                     Địa chỉ: 123 Đường ABC, Quận XYZ, TP.HCM<br>
-                    Điện thoại: 0123 456 789 | Email: info@shopswift.com<br>
-                    Website: www.shopswift.com
+                    Điện thoại: 0123 456 789 | Email: info@vivienne.com<br>
+                    Website: www.vivienne.com
                 </div>
             </div>
             
@@ -266,7 +266,7 @@ class InvoiceService
             </div>
             
             <div class="footer">
-                <p>Cảm ơn quý khách đã mua hàng tại ShopSwift!</p>
+                <p>Cảm ơn quý khách đã mua hàng tại VIVIENNE!</p>
                 <p>Hóa đơn này được tạo tự động. Vui lòng liên hệ chúng tôi nếu có thắc mắc.</p>
             </div>
         </body>

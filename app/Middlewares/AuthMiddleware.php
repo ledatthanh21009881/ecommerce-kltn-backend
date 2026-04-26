@@ -69,7 +69,7 @@ class AuthMiddleware
             
             // If no user found and account_id is available, try accounts table (for admin login)
             if (!$user && isset($payload['account_id'])) {
-                $sql = "SELECT account_id as user_id, account_name, account_type, is_active as account_active
+                $sql = "SELECT account_id, account_id AS user_id, account_name, account_type, is_active as account_active
                         FROM accounts 
                         WHERE account_id = ? AND is_active = 1";
                 
