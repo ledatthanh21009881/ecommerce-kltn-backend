@@ -1010,6 +1010,24 @@ class OrderController extends Controller
 
             try {
                 $updatedOrder = $this->performShippingTransition($orderId, $shipperId, 'rejected', $payload);
+
+                try {
+                    $pdo = $this->container->database()->getConnection();
+                    $notificationService = new NotificationService($pdo);
+                    $notificationService->sendPushNotification(
+                        $shipperId,
+                        'Đã từ chối đơn hàng',
+                        sprintf('Bạn đã từ chối thành công đơn #%d.', $orderId),
+                        [
+                            'order_id' => $orderId,
+                            'type' => 'order_rejected_by_shipper',
+                        ],
+                        'order_rejected_by_shipper'
+                    );
+                } catch (\Throwable $notifyEx) {
+                    error_log('[OrderController] rejectOrder notification: ' . $notifyEx->getMessage());
+                }
+
                 return $res->json(ResponseHelper::success($updatedOrder, 'Order rejected'));
             } catch (Exception $workflowException) {
                 return $this->shippingErrorResponse($res, $workflowException);
