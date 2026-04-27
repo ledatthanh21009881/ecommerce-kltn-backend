@@ -20,29 +20,25 @@ class CODPaymentService implements PaymentServiceInterface
 
     public function createPayment(array $data): array
     {
-        // Create payment record and auto-confirm
+        // COD: chờ thu khi giao — xác nhận sau khi shipper hoàn tất (OrderController).
         $paymentData = [
             'order_id' => $data['order_id'],
             'method' => 'cod',
-            'paid_amount' => $data['amount'],
-            'status' => 'confirmed', // Auto-confirm for COD
+            'paid_amount' => 0.00,
+            'status' => 'pending',
         ];
 
         $paymentId = $this->paymentModel->create($paymentData);
 
-        // Update confirmed_at
-        $this->paymentModel->updateStatus($paymentId, 'confirmed');
-
         return [
             'payment_id' => $paymentId,
-            'status' => 'confirmed',
-            'method' => 'cod'
+            'status' => 'pending',
+            'method' => 'cod',
         ];
     }
 
     public function processPayment(int $paymentId, array $data = []): bool
     {
-        // COD is already confirmed
         return true;
     }
 

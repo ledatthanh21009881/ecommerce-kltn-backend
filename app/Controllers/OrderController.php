@@ -434,8 +434,11 @@ class OrderController extends Controller
                 $adminNotify = new AdminNotificationService($this->container->database()->getConnection());
                 $adminNotify->notifyNewOrder($orderId, (float) $totalAmount);
                 if (!empty($paymentData) && ($paymentData['status'] ?? '') === 'pending') {
-                    $methodLabel = (string) ($paymentData['method'] ?? 'online');
-                    $adminNotify->notifyPaymentPending($orderId, $methodLabel);
+                    $pm = strtolower((string) ($paymentData['method'] ?? ''));
+                    if ($pm !== 'cod') {
+                        $methodLabel = (string) ($paymentData['method'] ?? 'online');
+                        $adminNotify->notifyPaymentPending($orderId, $methodLabel);
+                    }
                 }
             } catch (Exception $e) {
                 error_log('[OrderController] Admin notification: ' . $e->getMessage());
@@ -1242,7 +1245,41 @@ class OrderController extends Controller
             );
         }
 
+        if ($targetStatus === 'completed') {
+            $this->finalizeCodPaymentAfterDelivery($orderId);
+        }
+
         return $this->orderModel->getByIdWithDetails($orderId);
+    }
+
+    /**
+     * Khi shipper hoàn tất giao hàng: chốt thanh toán COD (pending → confirmed, ghi paid_amount).
+     */
+    private function finalizeCodPaymentAfterDelivery(int $orderId): void
+    {
+        try {
+            $payment = $this->paymentModel->getByOrderId($orderId);
+            if (!$payment || strtolower((string) ($payment['method'] ?? '')) !== 'cod') {
+                return;
+            }
+            if (($payment['status'] ?? '') !== 'pending') {
+                return;
+            }
+            $order = $this->orderModel->find($orderId);
+            if (!$order) {
+                return;
+            }
+            $cod = (float) ($order['cod_amount'] ?? 0);
+            $total = (float) ($order['total_amount'] ?? 0);
+            $amount = $cod > 0 ? $cod : $total;
+            $pid = (int) ($payment['payment_id'] ?? 0);
+            if ($pid <= 0) {
+                return;
+            }
+            $this->paymentModel->confirmCodCollection($pid, $amount);
+        } catch (\Throwable $e) {
+            error_log('[OrderController] finalizeCodPaymentAfterDelivery: ' . $e->getMessage());
+        }
     }
 
     private function shippingErrorResponse(Response $res, Exception $e)

@@ -131,6 +131,26 @@ class Payment extends Model
         return $payment && $payment['status'] === 'confirmed';
     }
 
+    /**
+     * Sau khi shipper giao xong (shipping completed): ghi nhận đã thu COD.
+     */
+    public function confirmCodCollection(int $paymentId, float $paidAmount): bool
+    {
+        $sql = "
+            UPDATE {$this->table}
+            SET status = 'confirmed',
+                paid_amount = ?,
+                confirmed_at = NOW(),
+                updated_at = NOW()
+            WHERE payment_id = ?
+              AND method = 'cod'
+              AND status = 'pending'
+        ";
+        $stmt = $this->getConnection()->prepare($sql);
+
+        return $stmt->execute([$paidAmount, $paymentId]);
+    }
+
     public function getPaymentHistory(int $orderId): array
     {
         $sql = "
