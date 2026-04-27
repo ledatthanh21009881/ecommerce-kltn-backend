@@ -9,6 +9,7 @@ use App\Domain\Users\User;
 use App\Support\CloudinaryService;
 use App\Support\MessengerCloudinaryService;
 use App\Services\WebSocketService;
+use App\Services\NotificationService;
 use Firebase\JWT\JWT;
 use Firebase\JWT\Key;
 use App\Core\Request;
@@ -384,6 +385,51 @@ class MessageController extends BaseController
                 'message' => $fullMessage
             ]);
 
+            // In-app + FCM cho shipper khi khách gửi tin (label shipper:{id}:order:{id})
+            if ($this->container && $fullMessage) {
+                try {
+                    $cid = (int) $conversationId;
+                    $conv = $this->conversationModel->getByConversationId($cid);
+                    if ($conv && !empty($conv['label']) && isset($conv['customer_id'])) {
+                        $label = (string) $conv['label'];
+                        $customerId = (int) $conv['customer_id'];
+                        $senderId = (int) ($fullMessage['sender_id'] ?? 0);
+                        if ($customerId > 0 && $senderId === $customerId && preg_match('/^shipper:(\d+):order:(\d+)$/', $label, $m)) {
+                            $shipperUserId = (int) $m[1];
+                            $orderNumericId = (int) $m[2];
+                            $pdo = $this->container->database()->getConnection();
+                            $notificationService = new NotificationService($pdo);
+                            $preview = trim((string) ($fullMessage['content'] ?? ''));
+                            if ($preview === '' || preg_match('/^\[(Image|Ảnh|Video)\]$/iu', $preview)) {
+                                $mediaList = $fullMessage['media'] ?? [];
+                                $preview = !empty($mediaList) ? '[Ảnh]' : 'Tin nhắn mới';
+                            }
+                            $fn = trim((string) ($fullMessage['first_name'] ?? ''));
+                            $ln = trim((string) ($fullMessage['last_name'] ?? ''));
+                            $who = trim($fn . ' ' . $ln) ?: 'Khách hàng';
+                            $snippet = function_exists('mb_substr')
+                                ? mb_substr($preview, 0, 120)
+                                : substr($preview, 0, 120);
+                            $notificationService->sendPushNotification(
+                                $shipperUserId,
+                                'Tin nhắn mới',
+                                $who . ': ' . $snippet,
+                                [
+                                    'type' => 'new_chat_message',
+                                    'conversation_id' => $cid,
+                                    'customer_user_id' => $customerId,
+                                    'order_id' => $orderNumericId,
+                                    'customer_name' => $who,
+                                ],
+                                'new_chat_message'
+                            );
+                        }
+                    }
+                } catch (\Throwable $e) {
+                    error_log('[MessageController] Shipper chat notification: ' . $e->getMessage());
+                }
+            }
+
             http_response_code(200);
             echo json_encode([
                 'success' => true,
@@ -604,23 +650,53 @@ class MessageController extends BaseController
 
             $file = $_FILES['media'];
             error_log('File received: ' . json_encode($file));
-            
+
             // Validate file type
             $allowedTypes = [
                 'image/jpeg', 'image/jpg', 'image/png', 'image/gif', 'image/webp',
                 'video/mp4', 'video/avi', 'video/mov', 'video/wmv', 'video/flv',
                 'audio/mp3', 'audio/wav', 'audio/ogg', 'audio/webm', 'audio/m4a'
             ];
-            
-            if (!in_array($file['type'], $allowedTypes)) {
+
+            // Client MIME (React Native / Android) is often wrong (e.g. application/octet-stream). Prefer finfo.
+            $clientType = strtolower(trim((string)($file['type'] ?? '')));
+            $sniffed = null;
+            $tmpPath = $file['tmp_name'] ?? '';
+            if ($tmpPath !== '' && function_exists('finfo_open')) {
+                $fi = @finfo_open(FILEINFO_MIME_TYPE);
+                if ($fi) {
+                    $sniffed = finfo_file($fi, $tmpPath);
+                    finfo_close($fi);
+                    if (is_string($sniffed)) {
+                        $sniffed = strtolower(trim($sniffed));
+                    } else {
+                        $sniffed = null;
+                    }
+                }
+            }
+
+            $effectiveType = $clientType;
+            if ($sniffed !== null && $sniffed !== '' && in_array($sniffed, $allowedTypes, true)) {
+                $effectiveType = $sniffed;
+            } elseif ($clientType !== '' && in_array($clientType, $allowedTypes, true)) {
+                $effectiveType = $clientType;
+            }
+
+            if ($effectiveType === 'image/jpg' || $effectiveType === 'image/pjpeg') {
+                $effectiveType = 'image/jpeg';
+            }
+
+            if (!in_array($effectiveType, $allowedTypes, true)) {
                 http_response_code(400);
                 echo json_encode([
                     'success' => false,
-                    'message' => 'Unsupported file type: ' . $file['type'],
+                    'message' => 'Unsupported file type',
                     'status_code' => 400
                 ]);
                 return;
             }
+
+            $file['type'] = $effectiveType;
 
             // Validate file size (50MB max)
             $maxSize = 50 * 1024 * 1024;

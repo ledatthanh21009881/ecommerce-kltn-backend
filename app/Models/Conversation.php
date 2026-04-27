@@ -20,7 +20,13 @@ class Conversation
     public function getConversationsWithLastMessage()
     {
         $sql = "SELECT c.*, u.first_name, u.last_name, u.email, u.avatar_url, 
-                       m.content as last_message, m.sent_at as last_message_time,
+                       CASE
+                         WHEN m.message_id IS NULL THEN NULL
+                         WHEN NULLIF(TRIM(m.content), '') IS NOT NULL THEN m.content
+                         WHEN EXISTS (SELECT 1 FROM message_media mm WHERE mm.message_id = m.message_id) THEN '[Ảnh]'
+                         ELSE NULL
+                       END as last_message,
+                       m.sent_at as last_message_time,
                        (SELECT COUNT(*) FROM messages mu
                         WHERE mu.conversation_id = c.conversation_id
                           AND mu.is_read = 0
@@ -43,7 +49,13 @@ class Conversation
     {
         $labelPrefix = sprintf('shipper:%d:order:', $shipperUserId);
         $sql = "SELECT c.*, u.first_name, u.last_name, u.email, u.avatar_url, 
-                       m.content as last_message, m.sent_at as last_message_time,
+                       CASE
+                         WHEN m.message_id IS NULL THEN NULL
+                         WHEN NULLIF(TRIM(m.content), '') IS NOT NULL THEN m.content
+                         WHEN EXISTS (SELECT 1 FROM message_media mm WHERE mm.message_id = m.message_id) THEN '[Ảnh]'
+                         ELSE NULL
+                       END as last_message,
+                       m.sent_at as last_message_time,
                        (SELECT COUNT(*) FROM messages mu
                         WHERE mu.conversation_id = c.conversation_id
                           AND mu.is_read = 0
@@ -66,6 +78,16 @@ class Conversation
         $stmt = $this->db->prepare($sql);
         $stmt->execute([$customerId]);
         return $stmt->fetch(\PDO::FETCH_ASSOC);
+    }
+
+    public function getByConversationId(int $conversationId): ?array
+    {
+        $sql = "SELECT * FROM conversations WHERE conversation_id = ? LIMIT 1";
+        $stmt = $this->db->prepare($sql);
+        $stmt->execute([$conversationId]);
+        $row = $stmt->fetch(\PDO::FETCH_ASSOC);
+
+        return $row ?: null;
     }
 
     public function getByCustomerAndLabel($customerId, $label)
