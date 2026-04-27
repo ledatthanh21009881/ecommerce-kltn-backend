@@ -55,8 +55,35 @@ class MessageController extends BaseController
             $customerId = $_GET['customer_id'] ?? null;
             
             if ($customerId) {
-                // Get conversation for specific customer
-                $conversation = $this->conversationModel->getByCustomerId($customerId);
+                $label = $this->resolveConversationLabel([
+                    'label' => $_GET['label'] ?? null,
+                    'shipper_id' => $_GET['shipper_id'] ?? null,
+                    'order_id' => $_GET['order_id'] ?? null,
+                ]);
+
+                // Do not resolve a shipper thread with order_id missing/zero (avoids shipper:X:order:0 drift vs real order)
+                if (preg_match('/^shipper:\d+:order:0$/', $label)) {
+                    http_response_code(200);
+                    echo json_encode([
+                        'success' => true,
+                        'message' => 'No conversation found',
+                        'status_code' => 200,
+                        'data' => [
+                            'items' => [],
+                            'pagination' => [
+                                'total' => 0,
+                                'per_page' => 50,
+                                'current_page' => 1,
+                                'last_page' => 1,
+                            ],
+                        ],
+                    ]);
+
+                    return;
+                }
+
+                // Get conversation for specific customer/context
+                $conversation = $this->conversationModel->getByCustomerAndLabel($customerId, $label);
                 if ($conversation) {
                     http_response_code(200);
                     echo json_encode([
@@ -93,6 +120,49 @@ class MessageController extends BaseController
                     ]);
                     return;
                 }
+            }
+
+            $myShipperFlag = $_GET['my_shipper_conversations'] ?? null;
+            if ($myShipperFlag === '1' || $myShipperFlag === 'true') {
+                $shipperUserId = (int) ($user['user_id'] ?? 0);
+                if ($shipperUserId <= 0) {
+                    http_response_code(401);
+                    echo json_encode([
+                        'success' => false,
+                        'message' => 'Unauthorized',
+                        'status_code' => 401
+                    ]);
+                    return;
+                }
+                $pdo = $this->container->database()->getConnection();
+                $chk = $pdo->prepare('SELECT user_id FROM shippers WHERE user_id = ? LIMIT 1');
+                $chk->execute([$shipperUserId]);
+                if (!$chk->fetch(\PDO::FETCH_ASSOC)) {
+                    http_response_code(403);
+                    echo json_encode([
+                        'success' => false,
+                        'message' => 'Shipper access required',
+                        'status_code' => 403
+                    ]);
+                    return;
+                }
+                $conversations = $this->conversationModel->getConversationsWithLastMessageForShipper($shipperUserId);
+                http_response_code(200);
+                echo json_encode([
+                    'success' => true,
+                    'message' => 'Success',
+                    'status_code' => 200,
+                    'data' => [
+                        'items' => $conversations,
+                        'pagination' => [
+                            'total' => count($conversations),
+                            'per_page' => 50,
+                            'current_page' => 1,
+                            'last_page' => 1
+                        ]
+                    ]
+                ]);
+                return;
             }
 
             // Get all conversations (for admin)
@@ -349,6 +419,7 @@ class MessageController extends BaseController
 
             $input = json_decode(file_get_contents('php://input'), true);
             $customerId = $input['customer_id'] ?? null;
+            $label = $this->resolveConversationLabel($input);
 
             if (!$customerId) {
                 http_response_code(400);
@@ -360,37 +431,63 @@ class MessageController extends BaseController
                 return;
             }
 
-            // Kiểm tra xem đã có conversation chưa
-            $existingConversation = $this->conversationModel->getByCustomerId($customerId);
-            if ($existingConversation) {
-                http_response_code(200);
+            $customerId = (int) $customerId;
+            $jwtUserId = (int) ($user['user_id'] ?? 0);
+            $bodyShipperId = isset($input['shipper_id']) && is_numeric($input['shipper_id']) ? (int) $input['shipper_id'] : 0;
+            $bodyOrderId = isset($input['order_id']) && is_numeric($input['order_id']) ? (int) $input['order_id'] : 0;
+
+            if ($jwtUserId !== $customerId) {
+                if ($bodyShipperId > 0 && $bodyShipperId === $jwtUserId) {
+                    if ($bodyOrderId <= 0 || !$this->assertShipperOwnsCustomerOrder($jwtUserId, $bodyOrderId, $customerId)) {
+                        http_response_code(403);
+                        echo json_encode([
+                            'success' => false,
+                            'message' => 'Cannot create conversation for this customer/order',
+                            'status_code' => 403
+                        ]);
+                        return;
+                    }
+                } else {
+                    http_response_code(403);
+                    echo json_encode([
+                        'success' => false,
+                        'message' => 'Forbidden',
+                        'status_code' => 403
+                    ]);
+                    return;
+                }
+            }
+
+            if ($bodyShipperId > 0 && $bodyOrderId <= 0) {
+                http_response_code(400);
                 echo json_encode([
-                    'success' => true,
-                    'message' => 'Conversation already exists',
-                    'status_code' => 200,
-                    'data' => $existingConversation
+                    'success' => false,
+                    'message' => 'order_id is required for shipper chat',
+                    'status_code' => 400
                 ]);
                 return;
             }
 
-            // Tạo conversation mới
-            $conversationData = [
-                'customer_id' => $customerId,
-                'label' => 'new',
-                'status' => 'open',
-                'created_at' => date('Y-m-d H:i:s')
-            ];
+            if (preg_match('/^shipper:\d+:order:0$/', $label)) {
+                http_response_code(400);
+                echo json_encode([
+                    'success' => false,
+                    'message' => 'Invalid shipper chat context (missing order_id)',
+                    'status_code' => 400
+                ]);
+                return;
+            }
 
-            $conversationId = $this->conversationModel->create($conversationData);
+            $before = $this->conversationModel->getByCustomerAndLabel($customerId, $label);
+            $conversationRow = $this->conversationModel->findOrCreateByCustomerAndLabel($customerId, $label, 'open');
+            $wasExisting = $before !== false && $before !== null;
 
             http_response_code(200);
             echo json_encode([
                 'success' => true,
-                'message' => 'Conversation created successfully',
+                'message' => $wasExisting ? 'Conversation already exists' : 'Conversation created successfully',
                 'status_code' => 200,
-                'data' => [
-                    'conversation_id' => $conversationId
-                ]
+                'data' => $conversationRow,
             ]);
 
         } catch (\Exception $e) {
@@ -401,6 +498,41 @@ class MessageController extends BaseController
                 'status_code' => 500
             ]);
         }
+    }
+
+    private function assertShipperOwnsCustomerOrder(int $shipperUserId, int $orderId, int $customerUserId): bool
+    {
+        $pdo = $this->container->database()->getConnection();
+        $sql = "SELECT o.order_id
+                FROM orders o
+                INNER JOIN shipping_tracking st ON st.order_id = o.order_id
+                WHERE o.order_id = ?
+                  AND o.customer_id = ?
+                  AND st.shipper_id = ?
+                LIMIT 1";
+        $stmt = $pdo->prepare($sql);
+        $stmt->execute([$orderId, $customerUserId, $shipperUserId]);
+        return (bool) $stmt->fetch(\PDO::FETCH_ASSOC);
+    }
+
+    private function resolveConversationLabel(array $data): string
+    {
+        $shipperIdRaw = $data['shipper_id'] ?? null;
+        $orderIdRaw = $data['order_id'] ?? null;
+        $explicit = isset($data['label']) ? trim((string)$data['label']) : '';
+
+        $shipperId = is_numeric($shipperIdRaw) ? (int)$shipperIdRaw : 0;
+        $orderId = is_numeric($orderIdRaw) ? (int)$orderIdRaw : 0;
+
+        if ($shipperId > 0) {
+            return sprintf('shipper:%d:order:%d', $shipperId, max(0, $orderId));
+        }
+
+        if ($explicit !== '') {
+            return $explicit;
+        }
+
+        return 'support';
     }
 
     // Đánh dấu tin nhắn đã đọc
