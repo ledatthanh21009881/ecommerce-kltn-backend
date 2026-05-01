@@ -5,6 +5,7 @@ namespace App\Controllers;
 use App\Models\Message;
 use App\Models\Conversation;
 use App\Models\MessageMedia;
+use App\Domain\Orders\Order;
 use App\Domain\Users\User;
 use App\Support\CloudinaryService;
 use App\Support\MessengerCloudinaryService;
@@ -331,6 +332,17 @@ class MessageController extends BaseController
                 return;
             }
 
+            if ($this->isShipperOrderThreadClosedForNewMessages($conversationRow)) {
+                http_response_code(403);
+                echo json_encode([
+                    'success' => false,
+                    'message' => 'Đơn đã hoàn thành hoặc đã hủy — không gửi thêm tin nhắn trong hội thoại này.',
+                    'status_code' => 403,
+                ]);
+
+                return;
+            }
+
             $replyToMessageId = isset($input['reply_to_message_id']) ? (int) $input['reply_to_message_id'] : 0;
             if ($replyToMessageId > 0) {
                 $parent = $this->messageModel->findById($replyToMessageId);
@@ -578,6 +590,12 @@ class MessageController extends BaseController
                 return;
             }
 
+            // FK conversations.customer_id -> customers(user_id): shipper thường chỉ có users/shippers.
+            $labelNormalized = strtolower(trim((string)$label));
+            if ($labelNormalized === 'support' && $jwtUserId === $customerId && $this->isRegisteredShipper($jwtUserId)) {
+                $this->ensureCustomerRowForMessaging($customerId);
+            }
+
             $before = $this->conversationModel->getByCustomerAndLabel($customerId, $label);
             $conversationRow = $this->conversationModel->findOrCreateByCustomerAndLabel($customerId, $label, 'open');
             $wasExisting = $before !== false && $before !== null;
@@ -597,6 +615,47 @@ class MessageController extends BaseController
                 'message' => 'Error: ' . $e->getMessage(),
                 'status_code' => 500
             ]);
+        }
+    }
+
+    private function isRegisteredShipper(int $userId): bool
+    {
+        $pdo = $this->container->database()->getConnection();
+        $stmt = $pdo->prepare('SELECT 1 FROM shippers WHERE user_id = ? LIMIT 1');
+        $stmt->execute([$userId]);
+
+        return (bool) $stmt->fetchColumn();
+    }
+
+    /**
+     * Một user_id trong `users` cần tồn tại trong `customers` để FK khi mở hội thoại messenger (support).
+     */
+    private function ensureCustomerRowForMessaging(int $userId): void
+    {
+        $pdo = $this->container->database()->getConnection();
+
+        $exists = $pdo->prepare('SELECT user_id FROM customers WHERE user_id = ? LIMIT 1');
+        $exists->execute([$userId]);
+        if ($exists->fetchColumn()) {
+            return;
+        }
+
+        $u = $pdo->prepare('SELECT user_id FROM users WHERE user_id = ? LIMIT 1');
+        $u->execute([$userId]);
+        if (!$u->fetchColumn()) {
+            throw new \InvalidArgumentException('User not found for messaging enrollment');
+        }
+
+        try {
+            $ins = $pdo->prepare(
+                'INSERT INTO customers (user_id, loyalty_points, total_orders, created_at, updated_at) VALUES (?, 0, 0, NOW(), NOW())'
+            );
+            $ins->execute([$userId]);
+        } catch (\PDOException $e) {
+            // Trùng lúc hai request đồng thời
+            if (!isset($e->errorInfo[1]) || (int) $e->errorInfo[1] !== 1062) {
+                throw $e;
+            }
         }
     }
 
@@ -1078,6 +1137,37 @@ class MessageController extends BaseController
         }
 
         return strtolower((string) ($user['account_type'] ?? '')) === 'admin';
+    }
+
+    /**
+     * Cuộc hội thoại shipper:{id}:order:{id}: chặn gửi tin khi đơn kết thúc (completed/rejected).
+     */
+    private function isShipperOrderThreadClosedForNewMessages(array $conversation): bool
+    {
+        $label = (string) ($conversation['label'] ?? '');
+        if (!preg_match('/^shipper:\d+:order:(\d+)$/i', $label, $m)) {
+            return false;
+        }
+        $orderId = (int) $m[1];
+        if ($orderId <= 0 || $this->container === null) {
+            return false;
+        }
+
+        try {
+            $database = $this->container->get('database');
+        } catch (\Throwable $e) {
+            return false;
+        }
+
+        $orderModel = new Order($database);
+        $order = $orderModel->find($orderId);
+        if (!$order || !isset($order['shipping_status'])) {
+            return false;
+        }
+
+        $shipping = strtolower((string) $order['shipping_status']);
+
+        return in_array($shipping, ['completed', 'rejected'], true);
     }
 
     /**

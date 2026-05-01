@@ -6,6 +6,7 @@ namespace App\Controllers;
 
 use App\Core\{Controller, Request, Response, Container};
 use App\Domain\Orders\Order;
+use App\Support\GeocodingService;
 use App\Support\ResponseHelper;
 use PDO;
 use Exception;
@@ -142,42 +143,74 @@ class UserOrderController extends Controller
                 return;
             }
 
+            // Khớp admin TrackingController: shipper hiện tại + vị trí từ shipper_locations hoặc shipping_tracking
             $sql = "
-                SELECT 
+                SELECT
                     o.order_id,
                     o.status,
                     o.total_amount,
                     o.created_at,
                     o.estimated_delivery_at,
-                    CONCAT(c.first_name, ' ', c.last_name) as customer_name,
-                    c.phone as customer_phone,
-                    JSON_UNQUOTE(JSON_EXTRACT(o.shipping_address_snapshot, '$.address_line')) as customer_address,
-                    st.shipper_id,
-                    CONCAT(u.first_name, ' ', u.last_name) as shipper_name,
-                    u.phone as shipper_phone,
+                    o.shipping_address_snapshot,
+                    CONCAT(cu.first_name, ' ', cu.last_name) AS customer_name,
+                    cu.phone AS customer_phone,
+                    JSON_UNQUOTE(JSON_EXTRACT(o.shipping_address_snapshot, '$.address_line')) AS customer_address,
+                    st_current.shipper_id,
+                    CONCAT(u.first_name, ' ', u.last_name) AS shipper_name,
+                    u.phone AS shipper_phone,
                     s.vehicle_info,
                     s.rating,
-                    sl.lat as current_lat,
-                    sl.lng as current_lng,
-                    sl.captured_at as location_updated_at,
-                    a.lat as destination_lat,
-                    a.lng as destination_lng,
-                    (SELECT COUNT(*) FROM order_tracking_events ote WHERE ote.order_id = o.order_id) as event_count,
-                    (SELECT ote.status FROM order_tracking_events ote WHERE ote.order_id = o.order_id ORDER BY ote.created_at DESC LIMIT 1) as last_status,
-                    (SELECT ote.created_at FROM order_tracking_events ote WHERE ote.order_id = o.order_id ORDER BY ote.created_at DESC LIMIT 1) as last_event_at
+                    a.lat AS addr_dest_lat,
+                    a.lng AS addr_dest_lng,
+                    COALESCE(sl.lat, st_latest.current_lat) AS current_lat,
+                    COALESCE(sl.lng, st_latest.current_lng) AS current_lng,
+                    sl.captured_at AS location_updated_at,
+                    (
+                        SELECT COUNT(*) FROM order_tracking_events ote WHERE ote.order_id = o.order_id
+                    ) AS event_count,
+                    (
+                        SELECT ote.status FROM order_tracking_events ote
+                        WHERE ote.order_id = o.order_id ORDER BY ote.created_at DESC LIMIT 1
+                    ) AS last_status,
+                    (
+                        SELECT ote.created_at FROM order_tracking_events ote
+                        WHERE ote.order_id = o.order_id ORDER BY ote.created_at DESC LIMIT 1
+                    ) AS last_event_at
                 FROM orders o
-                LEFT JOIN shipping_tracking st ON o.order_id = st.order_id
-                LEFT JOIN shippers s ON st.shipper_id = s.user_id
+                LEFT JOIN (
+                    SELECT stx.order_id, MAX(stx.shipper_id) AS shipper_id
+                    FROM shipping_tracking stx
+                    INNER JOIN (
+                        SELECT order_id, MAX(last_updated) AS max_last_updated
+                        FROM shipping_tracking
+                        GROUP BY order_id
+                    ) latest_st
+                        ON latest_st.order_id = stx.order_id
+                        AND latest_st.max_last_updated = stx.last_updated
+                    GROUP BY stx.order_id
+                ) st_current ON o.order_id = st_current.order_id
+                LEFT JOIN shipping_tracking st_latest
+                    ON st_latest.order_id = o.order_id
+                    AND st_latest.shipper_id = st_current.shipper_id
+                    AND st_latest.last_updated = (
+                        SELECT MAX(st2.last_updated)
+                        FROM shipping_tracking st2
+                        WHERE st2.order_id = o.order_id
+                          AND st2.shipper_id = st_current.shipper_id
+                    )
+                LEFT JOIN shippers s ON st_current.shipper_id = s.user_id
                 LEFT JOIN users u ON s.user_id = u.user_id
                 LEFT JOIN customers c ON o.customer_id = c.user_id
+                LEFT JOIN users cu ON c.user_id = cu.user_id
                 LEFT JOIN addresses a ON o.address_id = a.address_id
                 LEFT JOIN shipper_locations sl
-                    ON sl.shipper_id = st.shipper_id
+                    ON sl.shipper_id = st_current.shipper_id
                     AND sl.order_id = o.order_id
                     AND sl.captured_at = (
                         SELECT MAX(sl2.captured_at)
                         FROM shipper_locations sl2
-                        WHERE sl2.shipper_id = st.shipper_id AND sl2.order_id = o.order_id
+                        WHERE sl2.shipper_id = st_current.shipper_id
+                          AND sl2.order_id = o.order_id
                     )
                 WHERE o.order_id = ?
             ";
@@ -190,8 +223,10 @@ class UserOrderController extends Controller
                 return;
             }
 
+            $destination = $this->resolveCustomerOrderDestinationForTracking($row);
+
             $shipper = null;
-            if (!empty($row['shipper_id']) && $row['destination_lat'] !== null && $row['destination_lng'] !== null) {
+            if (!empty($row['shipper_id']) && $destination['lat'] !== null && $destination['lng'] !== null) {
                 $shipper = [
                     'user_id' => (int) $row['shipper_id'],
                     'shipper_name' => $row['shipper_name'] ?? '',
@@ -203,8 +238,8 @@ class UserOrderController extends Controller
                     'is_available' => false,
                     'status' => 'active',
                     'created_at' => $row['created_at'] ?? date('c'),
-                    'current_lat' => $row['current_lat'] !== null ? (float) $row['current_lat'] : null,
-                    'current_lng' => $row['current_lng'] !== null ? (float) $row['current_lng'] : null,
+                    'current_lat' => $this->normalizeCoordScalar($row['current_lat']),
+                    'current_lng' => $this->normalizeCoordScalar($row['current_lng']),
                     'location_updated_at' => $row['location_updated_at'] ?? null,
                     'active_orders_count' => 1,
                 ];
@@ -222,8 +257,8 @@ class UserOrderController extends Controller
                 'shipper_id' => $row['shipper_id'] ? (int) $row['shipper_id'] : null,
                 'shipper_name' => $row['shipper_name'] ?? null,
                 'shipper_phone' => $row['shipper_phone'] ?? null,
-                'destination_lat' => $row['destination_lat'] !== null ? (float) $row['destination_lat'] : null,
-                'destination_lng' => $row['destination_lng'] !== null ? (float) $row['destination_lng'] : null,
+                'destination_lat' => $destination['lat'],
+                'destination_lng' => $destination['lng'],
                 'event_count' => (int) ($row['event_count'] ?? 0),
                 'last_status' => $row['last_status'] ?? null,
                 'last_event_at' => $row['last_event_at'] ?? null,
@@ -236,5 +271,56 @@ class UserOrderController extends Controller
         } catch (Exception $e) {
             $res->json(ResponseHelper::serverError('Failed to fetch tracking: ' . $e->getMessage()));
         }
+    }
+
+    /** @param array<string,mixed> $trackingRow FROM orders + joins (addr_dest_lat, addr_dest_lng, shipping_address_snapshot) */
+    /** @return array{lat: ?float, lng: ?float} */
+    private function resolveCustomerOrderDestinationForTracking(array $trackingRow): array
+    {
+        $lat = $this->normalizeCoordScalar($trackingRow['addr_dest_lat'] ?? null);
+        $lng = $this->normalizeCoordScalar($trackingRow['addr_dest_lng'] ?? null);
+        if ($lat !== null && $lng !== null) {
+            return ['lat' => $lat, 'lng' => $lng];
+        }
+
+        $raw = $trackingRow['shipping_address_snapshot'] ?? null;
+        if ($raw !== null && $raw !== '') {
+            $decoded = json_decode((string) $raw, true);
+            if (is_array($decoded)) {
+                $pairs = [['lat', 'lng'], ['latitude', 'longitude'], ['lat', 'lon']];
+                foreach ($pairs as [$lk, $gnk]) {
+                    $tryLat = $this->normalizeCoordScalar($decoded[$lk] ?? null);
+                    $tryLng = $this->normalizeCoordScalar($decoded[$gnk] ?? null);
+                    if ($tryLat !== null && $tryLng !== null) {
+                        return ['lat' => $tryLat, 'lng' => $tryLng];
+                    }
+                }
+
+                $geo = GeocodingService::resolveFromParts(
+                    (string) ($decoded['address_line'] ?? ''),
+                    (string) ($decoded['ward'] ?? ''),
+                    (string) ($decoded['district'] ?? ''),
+                    (string) ($decoded['province'] ?? ''),
+                );
+                if ($geo !== null) {
+                    return ['lat' => $geo['lat'], 'lng' => $geo['lng']];
+                }
+            }
+        }
+
+        return ['lat' => null, 'lng' => null];
+    }
+
+    private function normalizeCoordScalar(mixed $v): ?float
+    {
+        if ($v === null || $v === '') {
+            return null;
+        }
+        if (!is_numeric($v)) {
+            return null;
+        }
+        $n = (float) $v;
+
+        return is_finite($n) ? $n : null;
     }
 }

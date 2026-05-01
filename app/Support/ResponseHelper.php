@@ -60,6 +60,11 @@ class ResponseHelper
         ]);
     }
     
+    public static function badRequest(string $message = 'Bad Request', mixed $errors = null): array
+    {
+        return self::error($message, 400, $errors);
+    }
+
     public static function unauthorized(string $message = 'Unauthorized'): array
     {
         return self::error($message, 401);
