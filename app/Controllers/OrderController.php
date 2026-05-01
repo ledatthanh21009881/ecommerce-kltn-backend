@@ -7,6 +7,7 @@ use App\Core\{Controller, Request, Response, Container, Database};
 use App\Domain\Orders\{Order, OrderItem};
 use App\Domain\Payments\Payment;
 use App\Services\Payment\{MockQRPaymentService, VNPayPaymentService, VietQRPaymentService, CODPaymentService, PayOSPaymentService};
+use App\Support\GeocodingService;
 use App\Support\ResponseHelper;
 use App\Core\Validator;
 use App\Services\AdminNotificationService;
@@ -142,6 +143,16 @@ class OrderController extends Controller
             if (!empty($data['address'])) {
                 error_log("OrderController: Address data provided, will create new address");
                 $addressData = $data['address'];
+                $addressLine = trim((string)($addressData['address_line'] ?? ''));
+                $ward = trim((string)($addressData['ward'] ?? ''));
+                $district = trim((string)($addressData['district'] ?? ''));
+                $province = trim((string)($addressData['province'] ?? ''));
+                $coordinates = GeocodingService::resolveFromParts($addressLine, $ward, $district, $province);
+                if (!$coordinates) {
+                    return $res->json(ResponseHelper::validationError([
+                        'address' => 'Không thể xác định tọa độ cho địa chỉ giao hàng mới. Vui lòng kiểm tra lại địa chỉ.',
+                    ]), 422);
+                }
                 error_log("OrderController: Attempting to create address for customer_id = " . $data['customer_id']);
                 error_log("OrderController: Address data = " . json_encode($addressData));
                 
@@ -149,7 +160,7 @@ class OrderController extends Controller
                 error_log("OrderController: Database connection obtained");
                 
                 // Create address with is_default = 0 (not default, just for this order)
-                $sql = "INSERT INTO addresses (user_id, receiver_name, phone, address_line, ward, district, province, is_default) VALUES (?, ?, ?, ?, ?, ?, ?, 0)";
+                $sql = "INSERT INTO addresses (user_id, receiver_name, phone, address_line, ward, district, province, is_default, lat, lng) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?)";
                 error_log("OrderController: SQL = " . $sql);
                 
                 try {
@@ -158,10 +169,12 @@ class OrderController extends Controller
                         $data['customer_id'],
                         $addressData['receiver_name'] ?? '',
                         $addressData['phone'] ?? '',
-                        $addressData['address_line'] ?? '',
-                        $addressData['ward'] ?? '',
-                        $addressData['district'] ?? '',
-                        $addressData['province'] ?? ''
+                        $addressLine,
+                        $ward,
+                        $district,
+                        $province,
+                        $coordinates['lat'],
+                        $coordinates['lng'],
                     ];
                     error_log("OrderController: INSERT params = " . json_encode($params));
                     
@@ -659,9 +672,9 @@ class OrderController extends Controller
                 return $res->json(ResponseHelper::serverError('Failed to assign shipper'));
             }
             
-            // 6. Cập nhật status đơn hàng thành 'processing' nếu đang là 'pending'
-            if ($order['status'] === 'pending') {
-                $this->orderModel->updateStatus($id, 'processing', $assignedBy, 'Order assigned to shipper');
+            // 6. Đồng bộ trạng thái đơn sang 'shipping' khi đã gán shipper
+            if (in_array($order['status'], ['pending', 'processing'], true)) {
+                $this->orderModel->updateStatus($id, 'shipping', $assignedBy, 'Order assigned to shipper');
             }
             
             // 7. Log thay đổi shipper nếu có

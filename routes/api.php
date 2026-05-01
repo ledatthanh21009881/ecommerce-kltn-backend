@@ -249,6 +249,7 @@ $router->post('/api/backend/v1/conversations', [MessageController::class, 'creat
 $router->post('/api/backend/v1/messages', [MessageController::class, 'sendMessage'], [new AuthMiddleware($container)]);
 $router->post('/api/backend/v1/messages/upload-media', [MessageController::class, 'uploadMedia'], [new AuthMiddleware($container)]);
 $router->delete('/api/backend/v1/messages/{id}', [MessageController::class, 'deleteMessage'], [new AuthMiddleware($container)]);
+$router->delete('/api/backend/v1/conversations/{id}', [MessageController::class, 'deleteConversation'], [new AuthMiddleware($container)]);
 $router->put('/api/backend/v1/conversations/{id}/mark-read', [MessageController::class, 'markAsRead'], [new AuthMiddleware($container)]);
 // ========================================
 // TEST ROUTES (NO AUTHENTICATION REQUIRED)
@@ -432,6 +433,7 @@ $router->post('/api/v1/shipper/orders/{id}/arrive', [OrderController::class, 'ar
 $router->post('/api/v1/shipper/orders/{id}/deliver', [OrderController::class, 'deliverOrder'], [new AuthMiddleware($container)]);
 $router->post('/api/v1/shipper/orders/{id}/complete', [OrderController::class, 'completeOrder'], [new AuthMiddleware($container)]);
 $router->post('/api/v1/shipper/orders/{id}/reject', [OrderController::class, 'rejectOrder'], [new AuthMiddleware($container)]);
+$router->post('/api/v1/shipper/location', [ShipperController::class, 'updateMyLocation'], [new AuthMiddleware($container)]);
 $router->post('/api/v1/shipper/fcm-token', [ShipperController::class, 'registerFCMToken'], [new AuthMiddleware($container)]);
 $router->get('/api/v1/shipper/notifications', [ShipperController::class, 'getNotifications'], [new AuthMiddleware($container)]);
 $router->get('/api/v1/shipper/notifications/unread-count', [ShipperController::class, 'getUnreadCount'], [new AuthMiddleware($container)]);

@@ -30,6 +30,10 @@ use Exception;
 class ShipperController extends Controller
 {
     private PDO $pdo;
+    private const VIETNAM_MIN_LAT = 8.0;
+    private const VIETNAM_MAX_LAT = 24.0;
+    private const VIETNAM_MIN_LNG = 102.0;
+    private const VIETNAM_MAX_LNG = 110.0;
 
     public function __construct($container)
     {
@@ -376,22 +380,42 @@ class ShipperController extends Controller
                 return;
             }
 
-            $lat = $data['lat'] ?? null;
-            $lng = $data['lng'] ?? null;
+            $lat = $data['lat'] ?? ($data['latitude'] ?? null);
+            $lng = $data['lng'] ?? ($data['longitude'] ?? null);
             $speed = $data['speed'] ?? 0;
             $heading = $data['heading'] ?? 0;
             $accuracy = $data['accuracy'] ?? 0;
             $batteryLevel = $data['battery_level'] ?? 100;
             $orderId = $data['order_id'] ?? null;
 
-            if (!$lat || !$lng) {
+            if (!is_numeric($lat) || !is_numeric($lng)) {
                 $res->json(ResponseHelper::badRequest('Latitude and longitude are required'));
                 return;
             }
 
+            $lat = (float) $lat;
+            $lng = (float) $lng;
+
             // Validate coordinates
             if ($lat < -90 || $lat > 90 || $lng < -180 || $lng > 180) {
                 $res->json(ResponseHelper::badRequest('Invalid coordinates'));
+                return;
+            }
+
+            $isInVietnam =
+                $lat >= self::VIETNAM_MIN_LAT &&
+                $lat <= self::VIETNAM_MAX_LAT &&
+                $lng >= self::VIETNAM_MIN_LNG &&
+                $lng <= self::VIETNAM_MAX_LNG;
+            if (!$isInVietnam) {
+                error_log(sprintf(
+                    '[updateLocation] Reject out-of-vietnam coordinates shipper_id=%s order_id=%s lat=%s lng=%s',
+                    (string)$shipperId,
+                    (string)($orderId ?? 'null'),
+                    (string)$lat,
+                    (string)$lng
+                ));
+                $res->json(ResponseHelper::badRequest('GPS vị trí ngoài phạm vi Việt Nam, vui lòng kiểm tra lại thiết bị'));
                 return;
             }
 
@@ -422,6 +446,31 @@ class ShipperController extends Controller
 
         } catch (Exception $e) {
             $res->json(ResponseHelper::serverError('Failed to update location: ' . $e->getMessage()));
+        }
+    }
+
+    /**
+     * Cập nhật vị trí GPS cho shipper đăng nhập hiện tại (mobile token).
+     *
+     * @param Request $req
+     * @param Response $res
+     * @return void
+     */
+    public function updateMyLocation(Request $req, Response $res): void
+    {
+        try {
+            $user = $req->getAttribute('user');
+            $shipperId = (int) ($user['user_id'] ?? 0);
+            if ($shipperId <= 0) {
+                $res->json(ResponseHelper::unauthorized('Shipper ID not found in token'));
+                return;
+            }
+
+            // Reuse existing logic by injecting shipper id into route param.
+            $req->setAttribute('id', (string) $shipperId);
+            $this->updateLocation($req, $res);
+        } catch (Exception $e) {
+            $res->json(ResponseHelper::serverError('Failed to update my location: ' . $e->getMessage()));
         }
     }
 
@@ -502,8 +551,8 @@ class ShipperController extends Controller
                     $insertStmt->execute();
                 }
 
-                // Update order status to processing
-                $orderUpdateSql = "UPDATE orders SET status = 'processing', updated_at = NOW() WHERE order_id = :order_id";
+                // Update order status to shipping once shipper is assigned
+                $orderUpdateSql = "UPDATE orders SET status = 'shipping', updated_at = NOW() WHERE order_id = :order_id";
                 $orderUpdateStmt = $this->pdo->prepare($orderUpdateSql);
                 $orderUpdateStmt->bindValue(':order_id', $orderId, PDO::PARAM_INT);
                 $orderUpdateStmt->execute();

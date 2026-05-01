@@ -43,6 +43,35 @@ class Conversation
     }
 
     /**
+     * Admin inbox: ẩn thread riêng khách ↔ shipper (label shipper:{id}:order:{id}).
+     */
+    public function getConversationsWithLastMessageForAdmin(): array
+    {
+        $sql = "SELECT c.*, u.first_name, u.last_name, u.email, u.avatar_url, 
+                       CASE
+                         WHEN m.message_id IS NULL THEN NULL
+                         WHEN NULLIF(TRIM(m.content), '') IS NOT NULL THEN m.content
+                         WHEN EXISTS (SELECT 1 FROM message_media mm WHERE mm.message_id = m.message_id) THEN '[Ảnh]'
+                         ELSE NULL
+                       END as last_message,
+                       m.sent_at as last_message_time,
+                       (SELECT COUNT(*) FROM messages mu
+                        WHERE mu.conversation_id = c.conversation_id
+                          AND mu.is_read = 0
+                          AND mu.deleted_at IS NULL
+                          AND mu.sender_id = c.customer_id) as unread_count
+                FROM conversations c
+                JOIN users u ON u.user_id = c.customer_id
+                LEFT JOIN messages m ON m.message_id = (SELECT message_id FROM messages WHERE conversation_id = c.conversation_id ORDER BY sent_at DESC LIMIT 1)
+                WHERE c.label IS NULL OR c.label = '' OR c.label NOT REGEXP '^shipper:[0-9]+:order:[0-9]+$'
+                ORDER BY c.last_updated_at DESC";
+
+        $stmt = $this->db->prepare($sql);
+        $stmt->execute();
+        return $stmt->fetchAll(\PDO::FETCH_ASSOC);
+    }
+
+    /**
      * Shipper app: only threads where label is shipper:{shipperUserId}:order:{n}
      */
     public function getConversationsWithLastMessageForShipper(int $shipperUserId)

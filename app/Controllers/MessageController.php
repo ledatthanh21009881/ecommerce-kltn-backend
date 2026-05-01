@@ -10,8 +10,6 @@ use App\Support\CloudinaryService;
 use App\Support\MessengerCloudinaryService;
 use App\Services\WebSocketService;
 use App\Services\NotificationService;
-use Firebase\JWT\JWT;
-use Firebase\JWT\Key;
 use App\Core\Request;
 use App\Core\Response;
 
@@ -38,10 +36,10 @@ class MessageController extends BaseController
     }
 
     // Lấy danh sách cuộc hội thoại
-    public function getConversations()
+    public function getConversations(Request $req, Response $res): void
     {
         try {
-            $user = $this->getCurrentUser();
+            $user = $this->getCurrentUser($req);
             if (!$user) {
                 http_response_code(401);
                 echo json_encode([
@@ -78,6 +76,18 @@ class MessageController extends BaseController
                                 'last_page' => 1,
                             ],
                         ],
+                    ]);
+
+                    return;
+                }
+
+                $customerIdInt = (int) $customerId;
+                if (!$this->userMayAccessShipperThread($user, ['label' => $label, 'customer_id' => $customerIdInt])) {
+                    http_response_code(403);
+                    echo json_encode([
+                        'success' => false,
+                        'message' => 'Forbidden — private shipper conversation',
+                        'status_code' => 403,
                     ]);
 
                     return;
@@ -166,8 +176,8 @@ class MessageController extends BaseController
                 return;
             }
 
-            // Get all conversations (for admin)
-            $conversations = $this->conversationModel->getConversationsWithLastMessage();
+            // Admin inbox: không hiển thị thread shipper:…:order:… (chỉ khách ↔ shipper)
+            $conversations = $this->conversationModel->getConversationsWithLastMessageForAdmin();
             
             http_response_code(200);
             echo json_encode([
@@ -199,7 +209,7 @@ class MessageController extends BaseController
     public function getMessages(Request $req, Response $res)
     {
         try {
-            $user = $this->getCurrentUser();
+            $user = $this->getCurrentUser($req);
             if (!$user) {
                 http_response_code(401);
                 echo json_encode([
@@ -211,6 +221,28 @@ class MessageController extends BaseController
             }
 
             $id = $req->getAttribute('id');
+            $conversation = $this->conversationModel->getByConversationId((int) $id);
+            if (!$conversation) {
+                http_response_code(404);
+                echo json_encode([
+                    'success' => false,
+                    'message' => 'Conversation not found',
+                    'status_code' => 404,
+                ]);
+
+                return;
+            }
+            if (!$this->userMayAccessShipperThread($user, $conversation)) {
+                http_response_code(403);
+                echo json_encode([
+                    'success' => false,
+                    'message' => 'Forbidden — private shipper conversation',
+                    'status_code' => 403,
+                ]);
+
+                return;
+            }
+
             $messages = $this->messageModel->getMessagesByConversation($id);
             
             http_response_code(200);
@@ -240,10 +272,10 @@ class MessageController extends BaseController
     }
 
     // Gửi tin nhắn
-    public function sendMessage()
+    public function sendMessage(Request $req, Response $res): void
     {
         try {
-            $user = $this->getCurrentUser();
+            $user = $this->getCurrentUser($req);
             if (!$user) {
                 http_response_code(401);
                 echo json_encode([
@@ -274,6 +306,28 @@ class MessageController extends BaseController
                     'message' => 'Conversation ID is required',
                     'status_code' => 400
                 ]);
+                return;
+            }
+
+            $conversationRow = $this->conversationModel->getByConversationId((int) $conversationId);
+            if (!$conversationRow) {
+                http_response_code(404);
+                echo json_encode([
+                    'success' => false,
+                    'message' => 'Conversation not found',
+                    'status_code' => 404,
+                ]);
+
+                return;
+            }
+            if (!$this->userMayAccessShipperThread($user, $conversationRow)) {
+                http_response_code(403);
+                echo json_encode([
+                    'success' => false,
+                    'message' => 'Forbidden — private shipper conversation',
+                    'status_code' => 403,
+                ]);
+
                 return;
             }
 
@@ -449,10 +503,10 @@ class MessageController extends BaseController
     }
 
     // Tạo cuộc hội thoại mới
-    public function createConversation()
+    public function createConversation(Request $req, Response $res): void
     {
         try {
-            $user = $this->getCurrentUser();
+            $user = $this->getCurrentUser($req);
             if (!$user) {
                 http_response_code(401);
                 echo json_encode([
@@ -585,7 +639,7 @@ class MessageController extends BaseController
     public function markAsRead(Request $req, Response $res)
     {
         try {
-            $user = $this->getCurrentUser();
+            $user = $this->getCurrentUser($req);
             if (!$user) {
                 http_response_code(401);
                 echo json_encode([
@@ -597,6 +651,28 @@ class MessageController extends BaseController
             }
 
             $id = $req->getAttribute('id');
+            $conversation = $this->conversationModel->getByConversationId((int) $id);
+            if (!$conversation) {
+                http_response_code(404);
+                echo json_encode([
+                    'success' => false,
+                    'message' => 'Conversation not found',
+                    'status_code' => 404,
+                ]);
+
+                return;
+            }
+            if (!$this->userMayAccessShipperThread($user, $conversation)) {
+                http_response_code(403);
+                echo json_encode([
+                    'success' => false,
+                    'message' => 'Forbidden — private shipper conversation',
+                    'status_code' => 403,
+                ]);
+
+                return;
+            }
+
             $this->messageModel->markAsRead($id, $user['user_id']);
 
             http_response_code(200);
@@ -617,7 +693,7 @@ class MessageController extends BaseController
     }
 
     // Upload media
-    public function uploadMedia()
+    public function uploadMedia(Request $req, Response $res): void
     {
         // Disable error display to prevent HTML output
         error_reporting(0);
@@ -626,7 +702,7 @@ class MessageController extends BaseController
         error_log('Upload media method called');
         
         try {
-            $user = $this->getCurrentUser();
+            $user = $this->getCurrentUser($req);
             if (!$user) {
                 http_response_code(401);
                 echo json_encode([
@@ -773,7 +849,7 @@ class MessageController extends BaseController
     public function deleteMessage(Request $req, Response $res)
     {
         try {
-            $user = $this->getCurrentUser();
+            $user = $this->getCurrentUser($req);
             if (!$user) {
                 http_response_code(401);
                 echo json_encode([
@@ -795,6 +871,18 @@ class MessageController extends BaseController
                     'message' => 'Message not found',
                     'status_code' => 404
                 ]);
+                return;
+            }
+
+            $conversationOfMessage = $this->conversationModel->getByConversationId((int) $message['conversation_id']);
+            if ($conversationOfMessage && !$this->userMayAccessShipperThread($user, $conversationOfMessage)) {
+                http_response_code(403);
+                echo json_encode([
+                    'success' => false,
+                    'message' => 'Forbidden — private shipper conversation',
+                    'status_code' => 403,
+                ]);
+
                 return;
             }
 
@@ -853,35 +941,215 @@ class MessageController extends BaseController
         }
     }
 
-    private function getCurrentUser()
+    /**
+     * Xóa toàn bộ cuộc hội thoại (tin + media + Cloudinary) — chỉ admin backend, không áp thread shipper:order.
+     */
+    public function deleteConversation(Request $req, Response $res): void
     {
-        $headers = getallheaders();
-        $authHeader = $headers['Authorization'] ?? null;
-        
-        if (!$authHeader || !str_starts_with($authHeader, 'Bearer ')) {
-            error_log('No Authorization header found');
+        try {
+            $user = $this->getCurrentUser($req);
+            if (!$user) {
+                http_response_code(401);
+                echo json_encode([
+                    'success' => false,
+                    'message' => 'Unauthorized',
+                    'status_code' => 401,
+                ]);
+
+                return;
+            }
+
+            if (!$this->isMessengerAdmin($user, $req)) {
+                http_response_code(403);
+                echo json_encode([
+                    'success' => false,
+                    'message' => 'Chỉ tài khoản admin mới xóa được hội thoại.',
+                    'status_code' => 403,
+                ]);
+
+                return;
+            }
+
+            $conversationId = (int) $req->getAttribute('id');
+            if ($conversationId <= 0) {
+                http_response_code(400);
+                echo json_encode([
+                    'success' => false,
+                    'message' => 'Invalid conversation id',
+                    'status_code' => 400,
+                ]);
+
+                return;
+            }
+
+            $conversation = $this->conversationModel->getByConversationId($conversationId);
+            if (!$conversation) {
+                http_response_code(404);
+                echo json_encode([
+                    'success' => false,
+                    'message' => 'Conversation not found',
+                    'status_code' => 404,
+                ]);
+
+                return;
+            }
+
+            $label = (string) ($conversation['label'] ?? '');
+            if (preg_match('/^shipper:\d+:order:\d+$/', $label)) {
+                http_response_code(403);
+                echo json_encode([
+                    'success' => false,
+                    'message' => 'Không thể xóa cuộc trò chuyện giữa khách và shipper từ admin.',
+                    'status_code' => 403,
+                ]);
+
+                return;
+            }
+
+            $pdo = $this->container->database()->getConnection();
+            $pdo->beginTransaction();
+
+            try {
+                $stmt = $pdo->prepare('SELECT message_id FROM messages WHERE conversation_id = ?');
+                $stmt->execute([$conversationId]);
+                $messageIds = $stmt->fetchAll(\PDO::FETCH_COLUMN);
+
+                foreach ($messageIds as $midRaw) {
+                    $mid = (int) $midRaw;
+                    if ($mid <= 0) {
+                        continue;
+                    }
+
+                    $mediaFiles = $this->messageMediaModel->getByMessageId($mid);
+                    foreach ($mediaFiles as $media) {
+                        if (!empty($media['public_id'])) {
+                            try {
+                                $this->messengerCloudinaryService->deleteImage($media['public_id']);
+                            } catch (\Throwable $e) {
+                                error_log('[deleteConversation] Cloudinary: ' . $e->getMessage());
+                            }
+                        }
+                    }
+                    $this->messageMediaModel->deleteByMessageId($mid);
+                }
+
+                $pdo->prepare('DELETE FROM messages WHERE conversation_id = ?')->execute([$conversationId]);
+                $pdo->prepare('DELETE FROM conversations WHERE conversation_id = ?')->execute([$conversationId]);
+                $pdo->commit();
+            } catch (\Throwable $e) {
+                if ($pdo->inTransaction()) {
+                    $pdo->rollBack();
+                }
+                throw $e;
+            }
+
+            http_response_code(200);
+            echo json_encode([
+                'success' => true,
+                'message' => 'Conversation deleted',
+                'status_code' => 200,
+            ]);
+        } catch (\Exception $e) {
+            error_log('deleteConversation: ' . $e->getMessage());
+            http_response_code(500);
+            echo json_encode([
+                'success' => false,
+                'message' => 'Error: ' . $e->getMessage(),
+                'status_code' => 500,
+            ]);
+        }
+    }
+
+    private function isMessengerAdmin(array $user, Request $req): bool
+    {
+        $payload = $req->getAttribute('token_payload');
+        if (is_array($payload) && !empty($payload['is_admin'])) {
+            return true;
+        }
+
+        $roles = $user['roles'] ?? [];
+        if (!is_array($roles)) {
+            $roles = ($roles !== null && $roles !== '') ? [(string) $roles] : [];
+        }
+        foreach ($roles as $r) {
+            if (strtolower(trim((string) $r)) === 'admin') {
+                return true;
+            }
+        }
+
+        return strtolower((string) ($user['account_type'] ?? '')) === 'admin';
+    }
+
+    /**
+     * Thread có label shipper:{shipperUserId}:order:* chỉ khách (customer_id) và shipper đó được truy cập.
+     */
+    private function userMayAccessShipperThread(array $user, array $conversation): bool
+    {
+        $label = (string) ($conversation['label'] ?? '');
+        if (!preg_match('/^shipper:(\d+):order:\d+$/', $label, $m)) {
+            return true;
+        }
+
+        $uid = (int) ($user['user_id'] ?? 0);
+        $customerId = (int) ($conversation['customer_id'] ?? 0);
+        $shipperUid = (int) $m[1];
+
+        return $uid === $customerId || $uid === $shipperUid;
+    }
+
+    /**
+     * Prefer AuthMiddleware's `user` on the request; fallback: Bearer via $_SERVER/getallheaders + App\Support\JWT.
+     */
+    private function getCurrentUser(?Request $req = null): ?array
+    {
+        if ($req !== null) {
+            $fromMw = $req->getAttribute('user');
+            if (is_array($fromMw) && $fromMw !== []) {
+                return $fromMw;
+            }
+        }
+
+        return $this->getCurrentUserFromBearerToken();
+    }
+
+    private function getCurrentUserFromBearerToken(): ?array
+    {
+        $authHeader = $this->readAuthorizationHeader();
+        if ($authHeader === null || $authHeader === '' || !str_starts_with($authHeader, 'Bearer ')) {
+            error_log('[MessageController] No Authorization header (fallback path)');
             return null;
         }
 
         $token = substr($authHeader, 7);
-        
-        try {
-            // IMPORTANT: Use the same JWT secret source as the rest of the app (app/config/app.php).
-            // On VPS, JWT_SECRET might not exist in shell env (printenv), but PHP may still load it via $_ENV.
-            // Loading from config keeps WebSocket auth and REST auth consistent.
-            $config = require __DIR__ . '/../config/app.php';
-            $jwtSecret = $config['jwt']['secret'] ?? 'your-secret-key-here';
-            $jwtAlgorithm = $config['jwt']['algorithm'] ?? 'HS256';
-            $decoded = JWT::decode($token, new Key($jwtSecret, $jwtAlgorithm));
-            error_log('JWT decoded successfully: ' . json_encode($decoded));
-            
-            $user = $this->userModel->getUserByAccountId($decoded->account_id);
-            error_log('User found: ' . ($user ? 'yes' : 'no'));
-            
-            return $user;
-        } catch (\Exception $e) {
-            error_log('JWT decode error: ' . $e->getMessage());
+        $payload = $this->container->jwt()->decode($token);
+        if (!is_array($payload) || !isset($payload['account_id'])) {
+            error_log('[MessageController] JWT decode failed or missing account_id (fallback path)');
             return null;
         }
+
+        $user = $this->userModel->getUserByAccountId($payload['account_id']);
+        return is_array($user) && $user !== [] ? $user : null;
+    }
+
+    /** Same header resolution as Request::header('Authorization'), plus REDIRECT/nginx cases. */
+    private function readAuthorizationHeader(): ?string
+    {
+        $key = 'HTTP_' . strtoupper(str_replace('-', '_', 'Authorization'));
+        $auth = $_SERVER[$key] ?? null;
+        if (is_string($auth) && $auth !== '') {
+            return $auth;
+        }
+        if (!empty($_SERVER['REDIRECT_HTTP_AUTHORIZATION']) && is_string($_SERVER['REDIRECT_HTTP_AUTHORIZATION'])) {
+            return $_SERVER['REDIRECT_HTTP_AUTHORIZATION'];
+        }
+        if (function_exists('getallheaders')) {
+            foreach (getallheaders() as $name => $value) {
+                if (strcasecmp((string) $name, 'Authorization') === 0 && is_string($value) && $value !== '') {
+                    return $value;
+                }
+            }
+        }
+
+        return null;
     }
 }
