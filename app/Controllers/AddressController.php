@@ -6,6 +6,7 @@ namespace App\Controllers;
 use App\Core\{Controller, Request, Response};
 use App\Domain\Auth\User;
 use App\Core\{Validator, Container};
+use App\Support\GeocodingService;
 use App\Support\ResponseHelper;
 use PDO;
 
@@ -58,21 +59,33 @@ class AddressController extends Controller
         $userId = (int) $user['user_id'];
         $isDefault = !empty($data['is_default']);
         $phone = preg_replace('/\D/', '', $data['phone']);
+        $addressLine = trim($data['address_line']);
+        $ward = trim($data['ward']);
+        $district = trim($data['district']);
+        $province = trim($data['province']);
+        $coordinates = GeocodingService::resolveFromParts($addressLine, $ward, $district, $province);
+        if (!$coordinates) {
+            return $res->json(ResponseHelper::validationError([
+                'address_line' => 'Không thể xác định tọa độ cho địa chỉ này. Vui lòng kiểm tra lại thông tin địa chỉ.',
+            ]));
+        }
         $pdo = $this->container->database()->getConnection();
         if ($isDefault) {
             $pdo->prepare("UPDATE addresses SET is_default = 0 WHERE user_id = ?")->execute([$userId]);
         }
-        $sql = "INSERT INTO addresses (user_id, receiver_name, phone, address_line, ward, district, province, is_default) VALUES (?, ?, ?, ?, ?, ?, ?, ?)";
+        $sql = "INSERT INTO addresses (user_id, receiver_name, phone, address_line, ward, district, province, is_default, lat, lng) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
         $stmt = $pdo->prepare($sql);
         $stmt->execute([
             $userId,
             trim($data['receiver_name']),
             $phone,
-            trim($data['address_line']),
-            trim($data['ward']),
-            trim($data['district']),
-            trim($data['province']),
+            $addressLine,
+            $ward,
+            $district,
+            $province,
             $isDefault ? 1 : 0,
+            $coordinates['lat'],
+            $coordinates['lng'],
         ]);
         $id = (int) $pdo->lastInsertId();
         return $res->json(ResponseHelper::success(['address_id' => $id], 'Address created'), 201);
@@ -110,19 +123,31 @@ class AddressController extends Controller
         }
         $isDefault = !empty($data['is_default']);
         $phone = preg_replace('/\D/', '', $data['phone']);
+        $addressLine = trim($data['address_line']);
+        $ward = trim($data['ward']);
+        $district = trim($data['district']);
+        $province = trim($data['province']);
+        $coordinates = GeocodingService::resolveFromParts($addressLine, $ward, $district, $province);
+        if (!$coordinates) {
+            return $res->json(ResponseHelper::validationError([
+                'address_line' => 'Không thể xác định tọa độ cho địa chỉ này. Vui lòng kiểm tra lại thông tin địa chỉ.',
+            ]));
+        }
         if ($isDefault) {
             $pdo->prepare("UPDATE addresses SET is_default = 0 WHERE user_id = ?")->execute([$userId]);
         }
-        $sql = "UPDATE addresses SET receiver_name = ?, phone = ?, address_line = ?, ward = ?, district = ?, province = ?, is_default = ? WHERE address_id = ? AND user_id = ?";
+        $sql = "UPDATE addresses SET receiver_name = ?, phone = ?, address_line = ?, ward = ?, district = ?, province = ?, is_default = ?, lat = ?, lng = ? WHERE address_id = ? AND user_id = ?";
         $stmt = $pdo->prepare($sql);
         $stmt->execute([
             trim($data['receiver_name']),
             $phone,
-            trim($data['address_line']),
-            trim($data['ward']),
-            trim($data['district']),
-            trim($data['province']),
+            $addressLine,
+            $ward,
+            $district,
+            $province,
             $isDefault ? 1 : 0,
+            $coordinates['lat'],
+            $coordinates['lng'],
             $id,
             $userId,
         ]);

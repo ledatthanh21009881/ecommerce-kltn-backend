@@ -221,6 +221,11 @@ class AuthController extends Controller
                 $this->refreshTokenModel->createToken($account['account_id'], $refreshToken);
             }
             
+            $locale = $account['preferred_locale'] ?? 'vi';
+            if (!in_array($locale, ['vi', 'en'], true)) {
+                $locale = 'vi';
+            }
+
             return $res->json(ResponseHelper::success([
                 'token' => $token,
                 'refresh_token' => $refreshToken,
@@ -228,7 +233,8 @@ class AuthController extends Controller
                     'account_id' => $account['account_id'],
                     'account_name' => $account['account_name'],
                     'account_type' => $account['account_type'],
-                    'role' => 'admin'
+                    'role' => 'admin',
+                    'preferred_locale' => $locale,
                 ],
                 'redirect' => '/admin/dashboard'
             ], 'Admin login successful'));
@@ -236,7 +242,41 @@ class AuthController extends Controller
         } catch (Exception $e) {
             return $res->json(ResponseHelper::serverError('Admin login failed: ' . $e->getMessage()));
         }
-    }    /**
+    }
+
+    /**
+     * PUT /api/v1/auth/admin/locale — lưu preferred_locale (vi|en) cho tài khoản admin.
+     */
+    public function updateAdminLocale(Request $req, Response $res): void
+    {
+        $payload = $req->getAttribute('user');
+        if (!is_array($payload) || !isset($payload['account_id'])) {
+            $res->json(ResponseHelper::unauthorized('Invalid token payload'));
+            return;
+        }
+
+        $data = $req->json();
+        $raw = $data['preferred_locale'] ?? '';
+        $loc = is_string($raw) ? $raw : (string) $raw;
+        if (!in_array($loc, ['vi', 'en'], true)) {
+            $res->json(ResponseHelper::badRequest('preferred_locale must be vi or en'));
+            return;
+        }
+
+        $accountId = (int) $payload['account_id'];
+        try {
+            $ok = $this->accountModel->update($accountId, ['preferred_locale' => $loc]);
+            if (!$ok) {
+                $res->json(ResponseHelper::serverError('Failed to update language preference'));
+                return;
+            }
+            $res->json(ResponseHelper::success(['preferred_locale' => $loc], 'Language saved'));
+        } catch (Exception $e) {
+            $res->json(ResponseHelper::serverError('Update failed: ' . $e->getMessage()));
+        }
+    }
+
+    /**
      * Check if current user is admin
      */
     public function checkAdminRole(Request $req, Response $res)
@@ -262,7 +302,7 @@ class AuthController extends Controller
         // Validate input
         $validator = Validator::make($data, [
             'account_name' => 'required|min:3',
-            'password' => 'required|min:6',
+            'password' => 'required',
             'first_name' => 'required',
             'last_name' => 'required',
             'email' => 'required|email',
@@ -444,7 +484,7 @@ class AuthController extends Controller
         // Validate input
         $validator = Validator::make($data, [
             'current_password' => 'required',
-            'new_password' => 'required|min:6',
+            'new_password' => 'required',
             'confirm_password' => 'required'
         ]);
         
@@ -477,6 +517,24 @@ class AuthController extends Controller
     }
     
     /**
+     * True if the account/role is allowed to use the admin area (for admin-only reset link).
+     */
+    private function isAdminAccountForReset(array $user, array $account): bool
+    {
+        if (isset($account['account_type']) && $account['account_type'] === 'admin') {
+            return true;
+        }
+        $pdo = $this->container->database()->getConnection();
+        $stmt = $pdo->prepare(
+            'SELECT 1 FROM user_roles ur
+             JOIN roles r ON ur.role_id = r.role_id
+             WHERE ur.user_id = ? AND r.role_name = ? LIMIT 1'
+        );
+        $stmt->execute([(int) $user['user_id'], 'admin']);
+        return (bool) $stmt->fetchColumn();
+    }
+
+    /**
      * Forgot Password - Generate new password and send via email
      */
     public function forgotPassword(Request $req, Response $res)
@@ -493,32 +551,56 @@ class AuthController extends Controller
         }
         
         try {
+            $wantsAdminFlow = !empty($data['for_admin']);
+
             // Find user by email
             $user = $this->userModel->findByEmail($data['email']);
             
             if (!$user) {
-                // Don't reveal if email exists or not for security
-                return $res->json(ResponseHelper::success(null, 'If the email exists, a password reset link has been sent.'));
+                return $res->json([
+                    'success' => false,
+                    'message' => 'This email is not registered.',
+                    'error_code' => 'EMAIL_NOT_REGISTERED',
+                    'status_code' => 404,
+                ], 404);
             }
             
             // Get account info
             $account = $this->accountModel->find($user['account_id']);
             
             if (!$account) {
-                return $res->json(ResponseHelper::success(null, 'If the email exists, a password reset link has been sent.'));
+                return $res->json([
+                    'success' => false,
+                    'message' => 'This email is not registered.',
+                    'error_code' => 'EMAIL_NOT_REGISTERED',
+                    'status_code' => 404,
+                ], 404);
+            }
+
+            if ($wantsAdminFlow && !$this->isAdminAccountForReset($user, $account)) {
+                return $res->json([
+                    'success' => false,
+                    'message' => 'This email is not linked to an admin account.',
+                    'error_code' => 'NOT_ADMIN_FOR_RESET',
+                    'status_code' => 404,
+                ], 404);
             }
             
             // Generate reset token
             $resetToken = bin2hex(random_bytes(32));
-            $expiresAt = date('Y-m-d H:i:s', strtotime('+1 hour'));
             
             // Save reset token to database
             $pdo = $this->container->database()->getConnection();
-            $stmt = $pdo->prepare("UPDATE accounts SET password_reset_token = ?, reset_token_expires_at = ? WHERE account_id = ?");
-            $stmt->execute([$resetToken, $expiresAt, $account['account_id']]);
+            $stmt = $pdo->prepare("UPDATE accounts SET password_reset_token = ?, reset_token_expires_at = DATE_ADD(NOW(), INTERVAL 1 HOUR) WHERE account_id = ?");
+            $stmt->execute([$resetToken, $account['account_id']]);
             
-            // Create reset link
-            $resetLink = "http://localhost:3000/reset-password?token=" . $resetToken;
+            // Create reset link (admin flow uses /admin-reset-password, storefront uses /reset-password)
+            $frontendBaseUrl = rtrim($_ENV['PAYOS_BASE_URL'] ?? 'http://localhost:3000', '/');
+            $isAdmin = $this->isAdminAccountForReset($user, $account);
+            $resetPath = ($wantsAdminFlow && $isAdmin) ? '/admin-reset-password' : '/reset-password';
+            $resetLink = $frontendBaseUrl . $resetPath . '?' . http_build_query([
+                'token' => trim($resetToken),
+            ]);
             
             // Send email with reset link
             $emailService = new \App\Support\EmailService();
@@ -553,6 +635,35 @@ class AuthController extends Controller
         
         return $password;
     }
+
+    /**
+     * Validate reset password token.
+     */
+    public function validateResetToken(Request $req, Response $res)
+    {
+        $data = $req->json();
+
+        $validator = Validator::make($data, [
+            'token' => 'required',
+        ]);
+
+        if (!$validator->validate()) {
+            return $res->json(ResponseHelper::validationError($validator->getErrors()));
+        }
+
+        try {
+            $token = (string)$data['token'];
+
+            $account = $this->accountModel->findByResetToken($token);
+            if (!$account) {
+                return $res->json(ResponseHelper::error('Invalid or expired reset token'));
+            }
+
+            return $res->json(ResponseHelper::success(null, 'Reset token is valid'));
+        } catch (Exception $e) {
+            return $res->json(ResponseHelper::serverError('Token validation failed: ' . $e->getMessage()));
+        }
+    }
     
     /**
      * Reset Password - Reset password using token
@@ -564,7 +675,7 @@ class AuthController extends Controller
         // Validate input
         $validator = Validator::make($data, [
             'token' => 'required',
-            'new_password' => 'required|min:6',
+            'new_password' => 'required',
             'confirm_password' => 'required'
         ]);
         
@@ -1089,7 +1200,7 @@ class AuthController extends Controller
         $validator = Validator::make($data, [
             'email' => 'required|email',
             'otp' => 'required|string|size:6',
-            'new_password' => 'required|min:6',
+            'new_password' => 'required',
             'confirm_password' => 'required'
         ]);
         

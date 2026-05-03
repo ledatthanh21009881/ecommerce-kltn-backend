@@ -194,10 +194,12 @@ class InventoryController extends Controller
             }
 
             // Validate input
-            if (isset($input['stock_quantity'])) {
-                if (!is_numeric($input['stock_quantity']) || $input['stock_quantity'] < 0) {
-                    return $res->json(['success' => false, 'message' => 'Invalid stock quantity', 'status_code' => 400], 400);
-                }
+            if (array_key_exists('stock_quantity', $input)) {
+                return $res->json([
+                    'success' => false,
+                    'message' => 'Direct stock updates are not allowed. Use purchase receipts to increase stock or stock adjustments to decrease stock.',
+                    'status_code' => 400
+                ], 400);
             }
             if (isset($input['status'])) {
                 if (!in_array($input['status'], ['in_stock', 'out_of_stock'])) {

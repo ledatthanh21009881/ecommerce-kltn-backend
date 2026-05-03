@@ -322,6 +322,14 @@ class Order extends Model
         $this->getConnection()->beginTransaction();
         
         try {
+            // Ensure every new order stores immutable shipping snapshot.
+            if (empty($data['shipping_address_snapshot']) && !empty($data['address_id'])) {
+                $snapshot = $this->buildShippingAddressSnapshot((int) $data['address_id']);
+                if ($snapshot !== null) {
+                    $data['shipping_address_snapshot'] = json_encode($snapshot, JSON_UNESCAPED_UNICODE);
+                }
+            }
+
             // Generate invoice number
             $data['invoice_number'] = $this->generateInvoiceNumber();
             
@@ -351,6 +359,50 @@ class Order extends Model
             $this->getConnection()->rollBack();
             throw $e;
         }
+    }
+
+    /**
+     * Build order shipping snapshot from addresses table.
+     */
+    private function buildShippingAddressSnapshot(int $addressId): ?array
+    {
+        if ($addressId <= 0) {
+            return null;
+        }
+
+        $sql = "
+            SELECT
+                receiver_name,
+                phone,
+                address_line,
+                ward,
+                district,
+                province,
+                lat,
+                lng
+            FROM addresses
+            WHERE address_id = ?
+            LIMIT 1
+        ";
+
+        $stmt = $this->getConnection()->prepare($sql);
+        $stmt->execute([$addressId]);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        if (!$row) {
+            return null;
+        }
+
+        return [
+            'receiver_name' => $row['receiver_name'] ?? '',
+            'phone' => $row['phone'] ?? '',
+            'address_line' => $row['address_line'] ?? '',
+            'ward' => $row['ward'] ?? '',
+            'district' => $row['district'] ?? '',
+            'province' => $row['province'] ?? '',
+            'lat' => isset($row['lat']) ? (float)$row['lat'] : null,
+            'lng' => isset($row['lng']) ? (float)$row['lng'] : null,
+        ];
     }
 
     public function update(int $id, array $data): bool

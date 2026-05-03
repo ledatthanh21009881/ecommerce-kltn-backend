@@ -15,58 +15,243 @@ class AdminController extends Controller
     }
     
     /**
-     * Admin Dashboard - Overview statistics
+     * Admin Dashboard — ?from=&to= (doanh thu + KPI); ?top_from=&top_to= (top SP, mặc định = from/to).
+     * Mặc định không query: tháng trước. Tối đa 366 ngày mỗi khoảng.
      */
     public function dashboard(Request $req, Response $res)
     {
         try {
             $pdo = $this->container->database()->getConnection();
-            
-            // Get basic statistics
-            $stats = [];
-            
-            // Total users
-            $stmt = $pdo->query("SELECT COUNT(*) as total_users FROM users");
-            $stats['total_users'] = $stmt->fetch()['total_users'];
-            
-            // Total customers
-            $stmt = $pdo->query("SELECT COUNT(*) as total_customers FROM customers");
-            $stats['total_customers'] = $stmt->fetch()['total_customers'];
-            
-            // Total orders
-            $stmt = $pdo->query("SELECT COUNT(*) as total_orders FROM orders");
-            $stats['total_orders'] = $stmt->fetch()['total_orders'];
-            
-            // Total products
-            $stmt = $pdo->query("SELECT COUNT(*) as total_products FROM products");
-            $stats['total_products'] = $stmt->fetch()['total_products'];
-            
-            // Recent orders (last 10)
-            $stmt = $pdo->query("
-                SELECT o.order_id, o.total_amount, o.status, o.created_at,
-                       u.first_name, u.last_name, u.email
-                FROM orders o
-                JOIN users u ON o.user_id = u.user_id
-                ORDER BY o.created_at DESC
-                LIMIT 10
+
+            $fromQ = $req->query('from');
+            $toQ = $req->query('to');
+
+            if ($fromQ && $toQ) {
+                $fromDt = \DateTimeImmutable::createFromFormat('Y-m-d', (string) $fromQ);
+                $toDt = \DateTimeImmutable::createFromFormat('Y-m-d', (string) $toQ);
+                if (!$fromDt || !$toDt || $fromDt->format('Y-m-d') !== $fromQ || $toDt->format('Y-m-d') !== $toQ) {
+                    return $res->json(ResponseHelper::error('Invalid from/to; use Y-m-d', 400), 400);
+                }
+                $fromStr = $fromDt->format('Y-m-d');
+                $toStr = $toDt->format('Y-m-d');
+            } else {
+                $firstThis = new \DateTimeImmutable('first day of this month');
+                $toImmutable = $firstThis->modify('-1 day');
+                $fromImmutable = $toImmutable->modify('first day of this month');
+                $fromStr = $fromImmutable->format('Y-m-d');
+                $toStr = $toImmutable->format('Y-m-d');
+            }
+
+            if ($fromStr > $toStr) {
+                return $res->json(ResponseHelper::error('from must be before or equal to to', 400), 400);
+            }
+
+            $fromTs = strtotime($fromStr . ' 00:00:00');
+            $toTs = strtotime($toStr . ' 00:00:00');
+            $daySpan = (int) (($toTs - $fromTs) / 86400) + 1;
+            if ($daySpan > 366) {
+                return $res->json(ResponseHelper::error('Date range cannot exceed 366 days', 400), 400);
+            }
+
+            $topFromQ = $req->query('top_from');
+            $topToQ = $req->query('top_to');
+            if (($topFromQ !== null && $topFromQ !== '') && ($topToQ !== null && $topToQ !== '')) {
+                $tf = \DateTimeImmutable::createFromFormat('Y-m-d', (string) $topFromQ);
+                $tt = \DateTimeImmutable::createFromFormat('Y-m-d', (string) $topToQ);
+                if (
+                    !$tf || !$tt
+                    || $tf->format('Y-m-d') !== (string) $topFromQ
+                    || $tt->format('Y-m-d') !== (string) $topToQ
+                ) {
+                    return $res->json(ResponseHelper::error('Invalid top_from/top_to; use Y-m-d', 400), 400);
+                }
+                $topFromStr = $tf->format('Y-m-d');
+                $topToStr = $tt->format('Y-m-d');
+            } else {
+                $topFromStr = $fromStr;
+                $topToStr = $toStr;
+            }
+            if ($topFromStr > $topToStr) {
+                return $res->json(ResponseHelper::error('top_from must be before or equal to top_to', 400), 400);
+            }
+            $topFromTs = strtotime($topFromStr . ' 00:00:00');
+            $topToTs = strtotime($topToStr . ' 00:00:00');
+            $topDaySpan = (int) (($topToTs - $topFromTs) / 86400) + 1;
+            if ($topDaySpan > 366) {
+                return $res->json(ResponseHelper::error('Top products range cannot exceed 366 days', 400), 400);
+            }
+
+            // Đơn & doanh thu trong khoảng (trừ đơn hủy/hoàn)
+            $stmt = $pdo->prepare("
+                SELECT 
+                    COUNT(*) AS c,
+                    COALESCE(SUM(total_amount), 0) AS rev
+                FROM orders
+                WHERE DATE(created_at) BETWEEN ? AND ?
+                  AND status NOT IN ('cancelled', 'returned')
             ");
-            $recent_orders = $stmt->fetchAll();
-            
-            // Monthly revenue (current month)
-            $stmt = $pdo->query("
-                SELECT COALESCE(SUM(total_amount), 0) as monthly_revenue
-                FROM orders 
-                WHERE MONTH(created_at) = MONTH(CURRENT_DATE())
-                  AND YEAR(created_at) = YEAR(CURRENT_DATE())
-                  AND status IN ('completed', 'delivered')
+            $stmt->execute([$fromStr, $toStr]);
+            $agg = $stmt->fetch(\PDO::FETCH_ASSOC) ?: ['c' => 0, 'rev' => 0];
+
+            // Chi phí nhập trong khoảng (chỉ phiếu đã xác nhận)
+            $stmt = $pdo->prepare("
+                SELECT COALESCE(SUM(pi.subtotal), 0) AS purchase_cost
+                FROM purchase_receipts pr
+                INNER JOIN purchase_items pi ON pr.receipt_id = pi.receipt_id
+                WHERE pr.status = 'confirmed'
+                  AND DATE(pr.updated_at) BETWEEN ? AND ?
             ");
-            $stats['monthly_revenue'] = $stmt->fetch()['monthly_revenue'];
-            
+            $stmt->execute([$fromStr, $toStr]);
+            $purchaseAgg = $stmt->fetch(\PDO::FETCH_ASSOC) ?: ['purchase_cost' => 0];
+            $totalPurchaseCost = (float) ($purchaseAgg['purchase_cost'] ?? 0);
+
+            $stmt = $pdo->query('SELECT COUNT(*) AS c FROM products');
+            $total_products = (int) ($stmt->fetch()['c'] ?? 0);
+
+            $stmt = $pdo->query('SELECT COUNT(*) AS c FROM users');
+            $total_users = (int) ($stmt->fetch()['c'] ?? 0);
+
+            // Doanh thu theo ngày trong khoảng
+            $stmt = $pdo->prepare("
+                SELECT DATE(created_at) AS d, COALESCE(SUM(total_amount), 0) AS revenue
+                FROM orders
+                WHERE DATE(created_at) BETWEEN ? AND ?
+                  AND status NOT IN ('cancelled', 'returned')
+                GROUP BY DATE(created_at)
+            ");
+            $stmt->execute([$fromStr, $toStr]);
+            $byDay = [];
+            foreach ($stmt->fetchAll(\PDO::FETCH_ASSOC) as $row) {
+                $byDay[(string) $row['d']] = (float) $row['revenue'];
+            }
+
+            $revenue_series = [];
+            $cursor = new \DateTimeImmutable($fromStr);
+            $end = new \DateTimeImmutable($toStr);
+            while ($cursor <= $end) {
+                $key = $cursor->format('Y-m-d');
+                $revenue_series[] = [
+                    'date' => $key,
+                    'revenue' => $byDay[$key] ?? 0.0,
+                ];
+                $cursor = $cursor->modify('+1 day');
+            }
+
+            // Chi phí nhập theo ngày trong khoảng (chỉ phiếu confirmed)
+            $stmt = $pdo->prepare("
+                SELECT DATE(pr.updated_at) AS d, COALESCE(SUM(pi.subtotal), 0) AS purchase_cost
+                FROM purchase_receipts pr
+                INNER JOIN purchase_items pi ON pr.receipt_id = pi.receipt_id
+                WHERE pr.status = 'confirmed'
+                  AND DATE(pr.updated_at) BETWEEN ? AND ?
+                GROUP BY DATE(pr.updated_at)
+            ");
+            $stmt->execute([$fromStr, $toStr]);
+            $costByDay = [];
+            foreach ($stmt->fetchAll(\PDO::FETCH_ASSOC) as $row) {
+                $costByDay[(string) $row['d']] = (float) $row['purchase_cost'];
+            }
+
+            $purchase_cost_series = [];
+            $cursor = new \DateTimeImmutable($fromStr);
+            while ($cursor <= $end) {
+                $key = $cursor->format('Y-m-d');
+                $purchase_cost_series[] = [
+                    'date' => $key,
+                    'purchase_cost' => $costByDay[$key] ?? 0.0,
+                ];
+                $cursor = $cursor->modify('+1 day');
+            }
+
+            // Top sản phẩm theo doanh thu trong khoảng (bỏ đơn hủy/hoàn)
+            $stmt = $pdo->prepare("
+                SELECT 
+                    p.product_id,
+                    p.product_name,
+                    SUM(oi.quantity) AS sales_count,
+                    SUM(oi.quantity * oi.unit_price) AS revenue,
+                    0 AS view_count
+                FROM order_items oi
+                INNER JOIN orders o ON oi.order_id = o.order_id
+                INNER JOIN product_variants pv ON oi.variant_id = pv.variant_id
+                INNER JOIN products p ON pv.product_id = p.product_id
+                WHERE o.status NOT IN ('cancelled', 'returned')
+                  AND DATE(o.created_at) BETWEEN ? AND ?
+                GROUP BY p.product_id, p.product_name
+                ORDER BY revenue DESC
+                LIMIT 5
+            ");
+            $stmt->execute([$topFromStr, $topToStr]);
+            $top_raw = $stmt->fetchAll(\PDO::FETCH_ASSOC);
+            $top_products = [];
+            foreach ($top_raw as $row) {
+                $top_products[] = [
+                    'product_id' => (int) $row['product_id'],
+                    'product_name' => $row['product_name'],
+                    'sales_count' => (int) $row['sales_count'],
+                    'revenue' => (float) $row['revenue'],
+                    'view_count' => (int) $row['view_count'],
+                ];
+            }
+
+            // Top sản phẩm nhập nhiều trong khoảng (chỉ phiếu confirmed)
+            $stmt = $pdo->prepare("
+                SELECT
+                    p.product_id,
+                    p.product_name,
+                    SUM(pi.quantity) AS purchase_quantity,
+                    SUM(pi.subtotal) AS purchase_cost
+                FROM purchase_items pi
+                INNER JOIN purchase_receipts pr ON pi.receipt_id = pr.receipt_id
+                INNER JOIN product_variants pv ON pi.variant_id = pv.variant_id
+                INNER JOIN products p ON pv.product_id = p.product_id
+                WHERE pr.status = 'confirmed'
+                  AND DATE(pr.updated_at) BETWEEN ? AND ?
+                GROUP BY p.product_id, p.product_name
+                ORDER BY purchase_quantity DESC, purchase_cost DESC
+                LIMIT 5
+            ");
+            $stmt->execute([$topFromStr, $topToStr]);
+            $top_purchased_raw = $stmt->fetchAll(\PDO::FETCH_ASSOC);
+            $top_purchased_products = [];
+            foreach ($top_purchased_raw as $row) {
+                $top_purchased_products[] = [
+                    'product_id' => (int) $row['product_id'],
+                    'product_name' => (string) $row['product_name'],
+                    'purchase_quantity' => (int) $row['purchase_quantity'],
+                    'purchase_cost' => (float) $row['purchase_cost'],
+                ];
+            }
+
+            $bestSellingProduct = null;
+            if (!empty($top_products)) {
+                $bestSellingProduct = [
+                    'product_id' => (int) $top_products[0]['product_id'],
+                    'product_name' => (string) $top_products[0]['product_name'],
+                    'sales_count' => (int) $top_products[0]['sales_count'],
+                    'revenue' => (float) $top_products[0]['revenue'],
+                ];
+            }
+
+            $grossProfit = (float) ($agg['rev'] ?? 0) - $totalPurchaseCost;
+
             return $res->json(ResponseHelper::success([
-                'stats' => $stats,
-                'recent_orders' => $recent_orders
+                'total_orders' => (int) ($agg['c'] ?? 0),
+                'total_revenue' => (float) ($agg['rev'] ?? 0),
+                'total_purchase_cost' => $totalPurchaseCost,
+                'gross_profit' => $grossProfit,
+                'total_products' => $total_products,
+                'total_users' => $total_users,
+                'date_from' => $fromStr,
+                'date_to' => $toStr,
+                'top_date_from' => $topFromStr,
+                'top_date_to' => $topToStr,
+                'revenue_series' => $revenue_series,
+                'purchase_cost_series' => $purchase_cost_series,
+                'top_products' => $top_products,
+                'top_purchased_products' => $top_purchased_products,
+                'best_selling_product' => $bestSellingProduct,
             ], 'Dashboard data retrieved successfully'));
-            
         } catch (Exception $e) {
             return $res->json(ResponseHelper::serverError('Failed to load dashboard: ' . $e->getMessage()));
         }
@@ -469,6 +654,37 @@ class AdminController extends Controller
             
         } catch (Exception $e) {
             return $res->json(ResponseHelper::serverError('Failed to delete user: ' . $e->getMessage()));
+        }
+    }
+
+    /**
+     * GET /api/backend/v1/users/{id}/addresses — Địa chỉ đã lưu của user (admin tạo đơn)
+     */
+    public function getUserAddresses(Request $req, Response $res)
+    {
+        try {
+            $userId = (int) $req->getAttribute('id');
+            if ($userId <= 0) {
+                return $res->json(ResponseHelper::validationError(['id' => 'Invalid user id']));
+            }
+
+            $pdo = $this->container->database()->getConnection();
+            $sql = "SELECT address_id, user_id, receiver_name, phone, address_line, ward, district, province, is_default, lat, lng
+                    FROM addresses WHERE user_id = ? ORDER BY is_default DESC, address_id DESC";
+            $stmt = $pdo->prepare($sql);
+            $stmt->execute([$userId]);
+            $list = $stmt->fetchAll(\PDO::FETCH_ASSOC);
+
+            foreach ($list as &$row) {
+                $row['address_id'] = (int) $row['address_id'];
+                $row['user_id'] = (int) $row['user_id'];
+                $row['is_default'] = (int) $row['is_default'];
+            }
+            unset($row);
+
+            return $res->json(ResponseHelper::success($list));
+        } catch (Exception $e) {
+            return $res->json(ResponseHelper::serverError('Failed to fetch addresses: ' . $e->getMessage()));
         }
     }
 }

@@ -2,7 +2,7 @@
 declare(strict_types=1);
 
 return [
-    'name' => $_ENV['APP_NAME'] ?? 'ShopSwift Ecommerce',
+    'name' => $_ENV['APP_NAME'] ?? 'VIVIENNE Ecommerce',
     'env' => $_ENV['APP_ENV'] ?? 'development',
     'debug' => filter_var($_ENV['APP_DEBUG'] ?? true, FILTER_VALIDATE_BOOLEAN),
     'url' => $_ENV['APP_URL'] ?? 'http://localhost:8000',
@@ -31,8 +31,8 @@ return [
         'username' => $_ENV['MAIL_USERNAME'] ?? '',
         'password' => $_ENV['MAIL_PASSWORD'] ?? '',
         'encryption' => $_ENV['MAIL_ENCRYPTION'] ?? 'tls',
-        'from_address' => $_ENV['MAIL_FROM_ADDRESS'] ?? 'noreply@shopswift.com',
-        'from_name' => $_ENV['MAIL_FROM_NAME'] ?? 'ShopSwift',
+        'from_address' => $_ENV['MAIL_FROM_ADDRESS'] ?? 'noreply@vivienne.com',
+        'from_name' => $_ENV['MAIL_FROM_NAME'] ?? 'VIVIENNE',
     ],
     
     'payment' => [

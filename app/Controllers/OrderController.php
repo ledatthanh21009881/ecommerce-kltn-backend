@@ -7,8 +7,10 @@ use App\Core\{Controller, Request, Response, Container, Database};
 use App\Domain\Orders\{Order, OrderItem};
 use App\Domain\Payments\Payment;
 use App\Services\Payment\{MockQRPaymentService, VNPayPaymentService, VietQRPaymentService, CODPaymentService, PayOSPaymentService};
+use App\Support\GeocodingService;
 use App\Support\ResponseHelper;
 use App\Core\Validator;
+use App\Services\AdminNotificationService;
 use App\Services\NotificationService;
 use Exception;
 use PDO;
@@ -141,6 +143,16 @@ class OrderController extends Controller
             if (!empty($data['address'])) {
                 error_log("OrderController: Address data provided, will create new address");
                 $addressData = $data['address'];
+                $addressLine = trim((string)($addressData['address_line'] ?? ''));
+                $ward = trim((string)($addressData['ward'] ?? ''));
+                $district = trim((string)($addressData['district'] ?? ''));
+                $province = trim((string)($addressData['province'] ?? ''));
+                $coordinates = GeocodingService::resolveFromParts($addressLine, $ward, $district, $province);
+                if (!$coordinates) {
+                    return $res->json(ResponseHelper::validationError([
+                        'address' => 'Không thể xác định tọa độ cho địa chỉ giao hàng mới. Vui lòng kiểm tra lại địa chỉ.',
+                    ]), 422);
+                }
                 error_log("OrderController: Attempting to create address for customer_id = " . $data['customer_id']);
                 error_log("OrderController: Address data = " . json_encode($addressData));
                 
@@ -148,7 +160,7 @@ class OrderController extends Controller
                 error_log("OrderController: Database connection obtained");
                 
                 // Create address with is_default = 0 (not default, just for this order)
-                $sql = "INSERT INTO addresses (user_id, receiver_name, phone, address_line, ward, district, province, is_default) VALUES (?, ?, ?, ?, ?, ?, ?, 0)";
+                $sql = "INSERT INTO addresses (user_id, receiver_name, phone, address_line, ward, district, province, is_default, lat, lng) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?)";
                 error_log("OrderController: SQL = " . $sql);
                 
                 try {
@@ -157,10 +169,12 @@ class OrderController extends Controller
                         $data['customer_id'],
                         $addressData['receiver_name'] ?? '',
                         $addressData['phone'] ?? '',
-                        $addressData['address_line'] ?? '',
-                        $addressData['ward'] ?? '',
-                        $addressData['district'] ?? '',
-                        $addressData['province'] ?? ''
+                        $addressLine,
+                        $ward,
+                        $district,
+                        $province,
+                        $coordinates['lat'],
+                        $coordinates['lng'],
                     ];
                     error_log("OrderController: INSERT params = " . json_encode($params));
                     
@@ -376,6 +390,7 @@ class OrderController extends Controller
             
             // Create payment if payment_method is provided
             $paymentData = null;
+            $paymentMethod = !empty($data['payment_method']) ? strtolower((string)$data['payment_method']) : null;
             if (!empty($data['payment_method'])) {
                 try {
                     $database = $this->container->database();
@@ -397,6 +412,18 @@ class OrderController extends Controller
                     // Don't fail order creation if payment creation fails
                 }
             }
+
+            // Auto-assign shipper for non-transfer orders.
+            // Transfer methods (payos/vnpay/vietqr/mock_qr/...) will be auto-assigned
+            // after payment is confirmed in PaymentController callbacks.
+            if (!$this->shouldWaitForPaymentConfirmationBeforeAutoAssign($paymentMethod)) {
+                try {
+                    $this->autoAssignOrderToBestAvailableShipper($orderId, 1, 'Auto-assigned on order creation');
+                    $order = $this->orderModel->getByIdWithDetails($orderId);
+                } catch (Exception $e) {
+                    error_log('[OrderController] Auto-assign on creation failed: ' . $e->getMessage());
+                }
+            }
             
             // Gửi email hóa đơn cho khách hàng
             try {
@@ -414,6 +441,20 @@ class OrderController extends Controller
             } catch (Exception $e) {
                 error_log("Error sending invoice email: " . $e->getMessage());
                 // Không throw exception để không ảnh hưởng đến việc tạo đơn hàng
+            }
+
+            try {
+                $adminNotify = new AdminNotificationService($this->container->database()->getConnection());
+                $adminNotify->notifyNewOrder($orderId, (float) $totalAmount);
+                if (!empty($paymentData) && ($paymentData['status'] ?? '') === 'pending') {
+                    $pm = strtolower((string) ($paymentData['method'] ?? ''));
+                    if ($pm !== 'cod') {
+                        $methodLabel = (string) ($paymentData['method'] ?? 'online');
+                        $adminNotify->notifyPaymentPending($orderId, $methodLabel);
+                    }
+                }
+            } catch (Exception $e) {
+                error_log('[OrderController] Admin notification: ' . $e->getMessage());
             }
             
             return $res->json(ResponseHelper::success($order, 'Order created successfully'));
@@ -631,9 +672,9 @@ class OrderController extends Controller
                 return $res->json(ResponseHelper::serverError('Failed to assign shipper'));
             }
             
-            // 6. Cập nhật status đơn hàng thành 'processing' nếu đang là 'pending'
-            if ($order['status'] === 'pending') {
-                $this->orderModel->updateStatus($id, 'processing', $assignedBy, 'Order assigned to shipper');
+            // 6. Đồng bộ trạng thái đơn sang 'shipping' khi đã gán shipper
+            if (in_array($order['status'], ['pending', 'processing'], true)) {
+                $this->orderModel->updateStatus($id, 'shipping', $assignedBy, 'Order assigned to shipper');
             }
             
             // 7. Log thay đổi shipper nếu có
@@ -689,6 +730,15 @@ class OrderController extends Controller
             } catch (Exception $e) {
                 // Log error but don't fail the assignment
                 error_log('[OrderController] Error sending push notification: ' . $e->getMessage());
+            }
+
+            try {
+                (new AdminNotificationService($this->container->database()->getConnection()))->notifyOrderAssigned(
+                    $id,
+                    (int) $data['shipper_id']
+                );
+            } catch (Exception $e) {
+                error_log('[OrderController] Admin shipper notification: ' . $e->getMessage());
             }
             
             $message = $existingAssignment && isset($oldShipperId) && $oldShipperId !== (int)$data['shipper_id']
@@ -973,6 +1023,24 @@ class OrderController extends Controller
 
             try {
                 $updatedOrder = $this->performShippingTransition($orderId, $shipperId, 'rejected', $payload);
+
+                try {
+                    $pdo = $this->container->database()->getConnection();
+                    $notificationService = new NotificationService($pdo);
+                    $notificationService->sendPushNotification(
+                        $shipperId,
+                        'Đã từ chối đơn hàng',
+                        sprintf('Bạn đã từ chối thành công đơn #%d.', $orderId),
+                        [
+                            'order_id' => $orderId,
+                            'type' => 'order_rejected_by_shipper',
+                        ],
+                        'order_rejected_by_shipper'
+                    );
+                } catch (\Throwable $notifyEx) {
+                    error_log('[OrderController] rejectOrder notification: ' . $notifyEx->getMessage());
+                }
+
                 return $res->json(ResponseHelper::success($updatedOrder, 'Order rejected'));
             } catch (Exception $workflowException) {
                 return $this->shippingErrorResponse($res, $workflowException);
@@ -1208,7 +1276,41 @@ class OrderController extends Controller
             );
         }
 
+        if ($targetStatus === 'completed') {
+            $this->finalizeCodPaymentAfterDelivery($orderId);
+        }
+
         return $this->orderModel->getByIdWithDetails($orderId);
+    }
+
+    /**
+     * Khi shipper hoàn tất giao hàng: chốt thanh toán COD (pending → confirmed, ghi paid_amount).
+     */
+    private function finalizeCodPaymentAfterDelivery(int $orderId): void
+    {
+        try {
+            $payment = $this->paymentModel->getByOrderId($orderId);
+            if (!$payment || strtolower((string) ($payment['method'] ?? '')) !== 'cod') {
+                return;
+            }
+            if (($payment['status'] ?? '') !== 'pending') {
+                return;
+            }
+            $order = $this->orderModel->find($orderId);
+            if (!$order) {
+                return;
+            }
+            $cod = (float) ($order['cod_amount'] ?? 0);
+            $total = (float) ($order['total_amount'] ?? 0);
+            $amount = $cod > 0 ? $cod : $total;
+            $pid = (int) ($payment['payment_id'] ?? 0);
+            if ($pid <= 0) {
+                return;
+            }
+            $this->paymentModel->confirmCodCollection($pid, $amount);
+        } catch (\Throwable $e) {
+            error_log('[OrderController] finalizeCodPaymentAfterDelivery: ' . $e->getMessage());
+        }
     }
 
     private function shippingErrorResponse(Response $res, Exception $e)
@@ -1226,6 +1328,100 @@ class OrderController extends Controller
 
         error_log('[Shipping Workflow] ' . $e->getMessage());
         return $res->json(ResponseHelper::serverError('Shipping workflow failed: ' . $e->getMessage()));
+    }
+
+    private function shouldWaitForPaymentConfirmationBeforeAutoAssign(?string $paymentMethod): bool
+    {
+        if (!$paymentMethod) {
+            return false;
+        }
+
+        return $paymentMethod !== 'cod';
+    }
+
+    private function autoAssignOrderToBestAvailableShipper(int $orderId, int $assignedBy, string $note = 'Auto-assigned by system'): bool
+    {
+        $order = $this->orderModel->find($orderId);
+        if (!$order) {
+            return false;
+        }
+
+        if (!in_array($order['status'], ['pending', 'processing'], true)) {
+            return false;
+        }
+
+        $pdo = $this->container->database()->getConnection();
+
+        $trackingStmt = $pdo->prepare("SELECT shipper_id FROM shipping_tracking WHERE order_id = ? LIMIT 1");
+        $trackingStmt->execute([$orderId]);
+        $existingAssignment = $trackingStmt->fetch(PDO::FETCH_ASSOC);
+        if ($existingAssignment && !empty($existingAssignment['shipper_id'])) {
+            return true;
+        }
+
+        $shipperSql = "
+            SELECT
+                s.user_id,
+                COUNT(CASE WHEN o.status IN ('processing', 'shipping') THEN 1 END) AS active_orders
+            FROM shippers s
+            LEFT JOIN shipping_tracking st ON st.shipper_id = s.user_id
+            LEFT JOIN orders o ON o.order_id = st.order_id
+            WHERE s.is_available = 1 AND s.status = 'active'
+            GROUP BY s.user_id, s.rating, s.on_time_delivery_pct
+            ORDER BY active_orders ASC, s.rating DESC, s.on_time_delivery_pct DESC
+            LIMIT 1
+        ";
+        $shipperStmt = $pdo->query($shipperSql);
+        $shipper = $shipperStmt ? $shipperStmt->fetch(PDO::FETCH_ASSOC) : null;
+
+        if (!$shipper || empty($shipper['user_id'])) {
+            return false;
+        }
+
+        $shipperId = (int)$shipper['user_id'];
+        $result = $this->orderModel->assignShipper($orderId, $shipperId, $assignedBy);
+        if (!$result) {
+            return false;
+        }
+
+        if ($order['status'] === 'pending') {
+            $this->orderModel->updateStatus($orderId, 'processing', $assignedBy, $note);
+        }
+
+        try {
+            $this->orderModel->forceShippingStatus(
+                $orderId,
+                'new_request',
+                $shipperId,
+                ['note' => $note]
+            );
+        } catch (Exception $e) {
+            error_log('[OrderController] Auto-assign force shipping status failed: ' . $e->getMessage());
+        }
+
+        try {
+            $notificationService = new NotificationService($pdo);
+            $notificationService->sendPushNotification(
+                $shipperId,
+                'Đơn hàng mới được gán',
+                "Bạn có đơn hàng #{$orderId} mới cần xử lý",
+                [
+                    'order_id' => $orderId,
+                    'type' => 'new_order_assigned'
+                ],
+                'new_order_assigned'
+            );
+        } catch (Exception $e) {
+            error_log('[OrderController] Auto-assign push notification failed: ' . $e->getMessage());
+        }
+
+        try {
+            (new AdminNotificationService($pdo))->notifyOrderAssigned($orderId, $shipperId);
+        } catch (Exception $e) {
+            error_log('[OrderController] Admin shipper notification: ' . $e->getMessage());
+        }
+
+        return true;
     }
 
     /**

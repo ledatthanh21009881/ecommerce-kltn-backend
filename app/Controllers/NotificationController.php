@@ -100,15 +100,15 @@ class NotificationController extends Controller
                     CONCAT(u.first_name, ' ', u.last_name) as shipper_name,
                     u.phone as shipper_phone,
                     
-                    -- Customer info
-                    CONCAT(c.first_name, ' ', c.last_name) as customer_name,
-                    c.phone as customer_phone
+                    -- Customer (name/phone live on `users`, not `customers` row)
+                    CONCAT(cu.first_name, ' ', cu.last_name) as customer_name,
+                    cu.phone as customer_phone
                     
                 FROM admin_notifications an
                 LEFT JOIN orders o ON an.related_order_id = o.order_id
                 LEFT JOIN shippers s ON an.related_shipper_id = s.user_id
                 LEFT JOIN users u ON s.user_id = u.user_id
-                LEFT JOIN customers c ON o.customer_id = c.user_id
+                LEFT JOIN users cu ON o.customer_id = cu.user_id
                 {$whereClause}
                 ORDER BY an.created_at DESC
                 LIMIT :limit OFFSET :offset
@@ -248,8 +248,11 @@ class NotificationController extends Controller
             }
 
             // Validate type
-            $validTypes = ['order_assigned', 'order_picked_up', 'order_delivered', 'order_cancelled', 
-                          'shipper_issue', 'order_delayed', 'shipper_offline', 'system_alert'];
+            $validTypes = [
+                'order_assigned', 'order_picked_up', 'order_delivered', 'order_cancelled',
+                'shipper_issue', 'order_delayed', 'shipper_offline', 'system_alert',
+                'new_order', 'payment_update',
+            ];
             if (!in_array($type, $validTypes)) {
                 $res->json(ResponseHelper::badRequest('Invalid notification type'));
                 return;

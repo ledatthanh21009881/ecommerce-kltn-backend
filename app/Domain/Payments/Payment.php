@@ -75,12 +75,6 @@ class Payment extends Model
 
     public function updateStatus(int $paymentId, string $status, ?string $transactionId = null): bool
     {
-        // #region agent log (commented out)
-        // $debugLogPath = __DIR__ . '/../../.cursor/debug.log';
-        // @mkdir(dirname($debugLogPath), 0777, true);
-        // file_put_contents($debugLogPath, json_encode(['hypothesisId'=>'H1','location'=>'Payment:updateStatus:START','message'=>'updateStatus called','data'=>['paymentId'=>$paymentId,'status'=>$status,'transactionId'=>$transactionId],'timestamp'=>round(microtime(true)*1000),'sessionId'=>'debug-session'])."\n", FILE_APPEND);
-        // #endregion
-        
         $sql = "
             UPDATE {$this->table} 
             SET status = ?, transaction_id = ?, confirmed_at = CASE WHEN ? = 'confirmed' THEN NOW() ELSE confirmed_at END, updated_at = NOW()
@@ -89,12 +83,6 @@ class Payment extends Model
         
         $stmt = $this->getConnection()->prepare($sql);
         $result = $stmt->execute([$status, $transactionId, $status, $paymentId]);
-        $rowsAffected = $stmt->rowCount();
-        
-        // #region agent log (commented out)
-        // file_put_contents($debugLogPath, json_encode(['hypothesisId'=>'H1','location'=>'Payment:updateStatus:RESULT','message'=>'updateStatus result','data'=>['paymentId'=>$paymentId,'status'=>$status,'result'=>$result,'rowsAffected'=>$rowsAffected],'timestamp'=>round(microtime(true)*1000),'sessionId'=>'debug-session'])."\n", FILE_APPEND);
-        // #endregion
-        
         return $result;
     }
 
@@ -141,6 +129,26 @@ class Payment extends Model
     {
         $payment = $this->getByOrderId($orderId);
         return $payment && $payment['status'] === 'confirmed';
+    }
+
+    /**
+     * Sau khi shipper giao xong (shipping completed): ghi nhận đã thu COD.
+     */
+    public function confirmCodCollection(int $paymentId, float $paidAmount): bool
+    {
+        $sql = "
+            UPDATE {$this->table}
+            SET status = 'confirmed',
+                paid_amount = ?,
+                confirmed_at = NOW(),
+                updated_at = NOW()
+            WHERE payment_id = ?
+              AND method = 'cod'
+              AND status = 'pending'
+        ";
+        $stmt = $this->getConnection()->prepare($sql);
+
+        return $stmt->execute([$paidAmount, $paymentId]);
     }
 
     public function getPaymentHistory(int $orderId): array

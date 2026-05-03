@@ -1,7 +1,7 @@
 <?php
 declare(strict_types=1);
 
-use App\Controllers\{AddressController, AuthController, ProductController, ProductImageController, OrderController, AdminController, CategoryController, CustomerController, ShipperController, UserController, RoleController, InventoryController, InvoiceController, VoucherController, MessageController, ShippingController, CartController, SupplierController, PurchaseReceiptController, TrackingController, NotificationController, ContentController, ContentCategoryController, PaymentController, CollectionController, UserOrderController};
+use App\Controllers\{AddressController, AuthController, ProductController, ProductImageController, OrderController, AdminController, CategoryController, CustomerController, ShipperController, UserController, RoleController, InventoryController, InvoiceController, VoucherController, MessageController, ShippingController, CartController, SupplierController, PurchaseReceiptController, StockAdjustmentController, TrackingController, NotificationController, ContentController, ContentCategoryController, PaymentController, CollectionController, UserOrderController, SiteSettingsController};
 use App\Middlewares\{AuthMiddleware, AdminMiddleware};
 
 // Debug test route
@@ -14,12 +14,14 @@ $router->get('/api/v1/test', function($req, $res) {
 // ========================================
 $router->post('/api/v1/auth/login', [AuthController::class, 'login']);
 $router->post('/api/v1/auth/admin/login', [AuthController::class, 'adminLogin']);
+$router->put('/api/v1/auth/admin/locale', [AuthController::class, 'updateAdminLocale'], [new AdminMiddleware($container)]);
 $router->post('/api/v1/auth/register', [AuthController::class, 'register']);
 $router->post('/api/v1/auth/logout', [AuthController::class, 'logout'], [new AuthMiddleware($container)]);
 $router->post('/api/v1/auth/refresh', [AuthController::class, 'refresh'], [new AuthMiddleware($container)]);
 $router->post('/api/v1/auth/refresh-advanced', [AuthController::class, 'refreshTokenAdvanced']);
 $router->post('/api/v1/auth/logout-advanced', [AuthController::class, 'logoutAdvanced'], [new AuthMiddleware($container)]);
 $router->post('/api/v1/auth/forgot-password', [AuthController::class, 'forgotPassword']);
+$router->post('/api/v1/auth/validate-reset-token', [AuthController::class, 'validateResetToken']);
 $router->post('/api/v1/auth/reset-password', [AuthController::class, 'resetPassword']);
 $router->get('/api/v1/auth/me', [AuthController::class, 'profile'], [new AuthMiddleware($container)]);
 $router->get('/api/v1/auth/check-admin', [AuthController::class, 'checkAdminRole'], [new AuthMiddleware($container)]);
@@ -160,6 +162,12 @@ $router->post('/api/backend/v1/orders/{id}/status', [OrderController::class, 'up
 $router->post('/api/backend/v1/orders/{id}/assign-shipper', [OrderController::class, 'assignShipper'], [new AuthMiddleware($container)]);
 $router->post('/api/backend/v1/orders/{id}/send-invoice', [OrderController::class, 'sendInvoice'], [new AuthMiddleware($container)]);
 $router->delete('/api/backend/v1/orders/{id}', [OrderController::class, 'destroy'], [new AuthMiddleware($container)]);
+$router->get('/api/backend/v1/admin/dashboard', [AdminController::class, 'dashboard'], [new AuthMiddleware($container)]);
+$router->get('/api/v1/public/site-settings', [SiteSettingsController::class, 'publicSettings']);
+$router->get('/api/backend/v1/settings', [SiteSettingsController::class, 'adminGet'], [new AdminMiddleware($container)]);
+$router->put('/api/backend/v1/settings', [SiteSettingsController::class, 'adminUpdate'], [new AdminMiddleware($container)]);
+$router->post('/api/backend/v1/settings', [SiteSettingsController::class, 'adminUpdate'], [new AdminMiddleware($container)]);
+$router->post('/api/backend/v1/settings/favicon', [SiteSettingsController::class, 'uploadFavicon'], [new AdminMiddleware($container)]);
 $router->get('/api/test/available-shippers', [OrderController::class, 'getAvailableShippers']);
 
 // ========================================
@@ -175,6 +183,7 @@ $router->delete('/api/backend/v1/inventory/{id}', [InventoryController::class, '
 // BACKEND USER MANAGEMENT API ROUTES (FOR ADMIN FRONTEND)
 // ========================================
 $router->get('/api/backend/v1/users', [AdminController::class, 'getUsers'], [new AuthMiddleware($container)]);
+$router->get('/api/backend/v1/users/{id}/addresses', [AdminController::class, 'getUserAddresses'], [new AuthMiddleware($container)]);
 $router->get('/api/backend/v1/users/stats', [AdminController::class, 'getUserStats'], [new AuthMiddleware($container)]);
 $router->post('/api/backend/v1/users', [AdminController::class, 'createUser'], [new AuthMiddleware($container)]);
 $router->put('/api/backend/v1/users/{id}', [AdminController::class, 'updateUser'], [new AuthMiddleware($container)]);
@@ -211,6 +220,16 @@ $router->get('/api/collections/{collection_id}/images', [CollectionController::c
 $router->get('/api/collections/{slug}', [CollectionController::class, 'showBySlug']);
 
 // ========================================
+// COLLECTIONS ROUTES (admin, auth required)
+// ========================================
+$router->get('/api/backend/v1/collections', [CollectionController::class, 'adminIndex'], [new AuthMiddleware($container)]);
+$router->get('/api/backend/v1/collections/{id}', [CollectionController::class, 'adminShow'], [new AuthMiddleware($container)]);
+$router->post('/api/backend/v1/collections', [CollectionController::class, 'adminStore'], [new AuthMiddleware($container)]);
+$router->put('/api/backend/v1/collections/reorder', [CollectionController::class, 'adminReorder'], [new AuthMiddleware($container)]);
+$router->put('/api/backend/v1/collections/{id}', [CollectionController::class, 'adminUpdate'], [new AuthMiddleware($container)]);
+$router->delete('/api/backend/v1/collections/{id}', [CollectionController::class, 'adminDestroy'], [new AuthMiddleware($container)]);
+
+// ========================================
 // CART MANAGEMENT ROUTES
 // ========================================
 // Cart routes - allow guest users (no auth required, but middleware will check if token exists)
@@ -230,6 +249,7 @@ $router->post('/api/backend/v1/conversations', [MessageController::class, 'creat
 $router->post('/api/backend/v1/messages', [MessageController::class, 'sendMessage'], [new AuthMiddleware($container)]);
 $router->post('/api/backend/v1/messages/upload-media', [MessageController::class, 'uploadMedia'], [new AuthMiddleware($container)]);
 $router->delete('/api/backend/v1/messages/{id}', [MessageController::class, 'deleteMessage'], [new AuthMiddleware($container)]);
+$router->delete('/api/backend/v1/conversations/{id}', [MessageController::class, 'deleteConversation'], [new AuthMiddleware($container)]);
 $router->put('/api/backend/v1/conversations/{id}/mark-read', [MessageController::class, 'markAsRead'], [new AuthMiddleware($container)]);
 // ========================================
 // TEST ROUTES (NO AUTHENTICATION REQUIRED)
@@ -413,6 +433,7 @@ $router->post('/api/v1/shipper/orders/{id}/arrive', [OrderController::class, 'ar
 $router->post('/api/v1/shipper/orders/{id}/deliver', [OrderController::class, 'deliverOrder'], [new AuthMiddleware($container)]);
 $router->post('/api/v1/shipper/orders/{id}/complete', [OrderController::class, 'completeOrder'], [new AuthMiddleware($container)]);
 $router->post('/api/v1/shipper/orders/{id}/reject', [OrderController::class, 'rejectOrder'], [new AuthMiddleware($container)]);
+$router->post('/api/v1/shipper/location', [ShipperController::class, 'updateMyLocation'], [new AuthMiddleware($container)]);
 $router->post('/api/v1/shipper/fcm-token', [ShipperController::class, 'registerFCMToken'], [new AuthMiddleware($container)]);
 $router->get('/api/v1/shipper/notifications', [ShipperController::class, 'getNotifications'], [new AuthMiddleware($container)]);
 $router->get('/api/v1/shipper/notifications/unread-count', [ShipperController::class, 'getUnreadCount'], [new AuthMiddleware($container)]);
@@ -755,6 +776,22 @@ $router->put('/api/backend/v1/purchase-receipts', [PurchaseReceiptController::cl
 $router->delete('/api/backend/v1/purchase-receipts', [PurchaseReceiptController::class, 'delete'], [new AuthMiddleware($container)]);
 
 // ========================================
+// STOCK ADJUSTMENT MANAGEMENT API ROUTES
+// ========================================
+$router->get('/api/v1/stock-adjustments', [StockAdjustmentController::class, 'index'], [new AuthMiddleware($container)]);
+$router->post('/api/v1/stock-adjustments', [StockAdjustmentController::class, 'store'], [new AuthMiddleware($container)]);
+$router->post('/api/v1/stock-adjustments/confirm', [StockAdjustmentController::class, 'confirm'], [new AuthMiddleware($container)]);
+$router->post('/api/v1/stock-adjustments/cancel', [StockAdjustmentController::class, 'cancel'], [new AuthMiddleware($container)]);
+$router->delete('/api/v1/stock-adjustments', [StockAdjustmentController::class, 'delete'], [new AuthMiddleware($container)]);
+
+// Backend API routes (for admin frontend)
+$router->get('/api/backend/v1/stock-adjustments', [StockAdjustmentController::class, 'index'], [new AuthMiddleware($container)]);
+$router->post('/api/backend/v1/stock-adjustments', [StockAdjustmentController::class, 'store'], [new AuthMiddleware($container)]);
+$router->post('/api/backend/v1/stock-adjustments/confirm', [StockAdjustmentController::class, 'confirm'], [new AuthMiddleware($container)]);
+$router->post('/api/backend/v1/stock-adjustments/cancel', [StockAdjustmentController::class, 'cancel'], [new AuthMiddleware($container)]);
+$router->delete('/api/backend/v1/stock-adjustments', [StockAdjustmentController::class, 'delete'], [new AuthMiddleware($container)]);
+
+// ========================================
 // ORDER TRACKING SYSTEM API ROUTES
 // ========================================
 // Order Tracking
@@ -783,6 +820,9 @@ $router->delete('/api/backend/v1/notifications/{id}', [NotificationController::c
 // ========================================
 // CONTENT MANAGEMENT SYSTEM API ROUTES
 // ========================================
+// Public content endpoint (no auth)
+$router->get('/api/backend/v1/content/public/slug/{slug}', [ContentController::class, 'getPublicBySlug']);
+
 // Content CRUD
 $router->get('/api/backend/v1/content', [ContentController::class, 'index'], [new AuthMiddleware($container)]);
 $router->get('/api/backend/v1/content/{id}', [ContentController::class, 'show'], [new AuthMiddleware($container)]);

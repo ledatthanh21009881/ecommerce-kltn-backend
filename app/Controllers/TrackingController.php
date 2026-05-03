@@ -70,7 +70,7 @@ class TrackingController extends Controller
 
             // Shipper filter
             if ($shipperId) {
-                $whereConditions[] = "st.shipper_id = :shipper_id";
+                $whereConditions[] = "st_current.shipper_id = :shipper_id";
                 $params_array[':shipper_id'] = $shipperId;
             }
 
@@ -86,7 +86,7 @@ class TrackingController extends Controller
 
             // Search filter
             if ($search) {
-                $whereConditions[] = "(o.order_id LIKE :search OR c.first_name LIKE :search OR c.last_name LIKE :search OR u.first_name LIKE :search OR u.last_name LIKE :search)";
+                $whereConditions[] = "(o.order_id LIKE :search OR cu.first_name LIKE :search OR cu.last_name LIKE :search OR u.first_name LIKE :search OR u.last_name LIKE :search)";
                 $params_array[':search'] = "%{$search}%";
             }
 
@@ -96,18 +96,19 @@ class TrackingController extends Controller
             $sql = "
                 SELECT 
                     o.order_id,
-                    o.status,
+                    o.status as status,
                     o.total_amount,
                     o.created_at,
                     o.estimated_delivery_at,
                     
                     -- Customer info
-                    CONCAT(c.first_name, ' ', c.last_name) as customer_name,
-                    c.phone as customer_phone,
+                    o.customer_id as customer_id,
+                    CONCAT(cu.first_name, ' ', cu.last_name) as customer_name,
+                    cu.phone as customer_phone,
                     JSON_UNQUOTE(JSON_EXTRACT(o.shipping_address_snapshot, '$.address_line')) as customer_address,
                     
                     -- Shipper info
-                    st.shipper_id,
+                    st_current.shipper_id,
                     CONCAT(u.first_name, ' ', u.last_name) as shipper_name,
                     u.phone as shipper_phone,
                     s.vehicle_info,
@@ -123,23 +124,35 @@ class TrackingController extends Controller
                     a.lng as destination_lng,
                     
                     -- Tracking info
-                    (SELECT COUNT(*) FROM order_tracking_events ote WHERE ote.order_id = o.order_id) as event_count,
-                    (SELECT ote.status FROM order_tracking_events ote WHERE ote.order_id = o.order_id ORDER BY ote.created_at DESC LIMIT 1) as last_status,
-                    (SELECT ote.created_at FROM order_tracking_events ote WHERE ote.order_id = o.order_id ORDER BY ote.created_at DESC LIMIT 1) as last_event_at
+                    (SELECT COUNT(*) FROM order_delivery_events ode WHERE ode.order_id = o.order_id) as event_count,
+                    (SELECT ode.status_to FROM order_delivery_events ode WHERE ode.order_id = o.order_id ORDER BY ode.created_at DESC LIMIT 1) as last_status,
+                    (SELECT ode.created_at FROM order_delivery_events ode WHERE ode.order_id = o.order_id ORDER BY ode.created_at DESC LIMIT 1) as last_event_at
                     
                 FROM orders o
-                LEFT JOIN shipping_tracking st ON o.order_id = st.order_id
-                LEFT JOIN shippers s ON st.shipper_id = s.user_id
+                LEFT JOIN (
+                    SELECT stx.order_id, MAX(stx.shipper_id) AS shipper_id
+                    FROM shipping_tracking stx
+                    INNER JOIN (
+                        SELECT order_id, MAX(last_updated) AS max_last_updated
+                        FROM shipping_tracking
+                        GROUP BY order_id
+                    ) latest_st
+                        ON latest_st.order_id = stx.order_id
+                        AND latest_st.max_last_updated = stx.last_updated
+                    GROUP BY stx.order_id
+                ) st_current ON o.order_id = st_current.order_id
+                LEFT JOIN shippers s ON st_current.shipper_id = s.user_id
                 LEFT JOIN users u ON s.user_id = u.user_id
                 LEFT JOIN customers c ON o.customer_id = c.user_id
+                LEFT JOIN users cu ON c.user_id = cu.user_id
                 LEFT JOIN addresses a ON o.address_id = a.address_id
                 LEFT JOIN shipper_locations sl
-                    ON sl.shipper_id = st.shipper_id
+                    ON sl.shipper_id = st_current.shipper_id
                     AND sl.order_id = o.order_id
                     AND sl.captured_at = (
                         SELECT MAX(sl2.captured_at)
                         FROM shipper_locations sl2
-                        WHERE sl2.shipper_id = st.shipper_id AND sl2.order_id = o.order_id
+                        WHERE sl2.shipper_id = st_current.shipper_id AND sl2.order_id = o.order_id
                     )
                 {$whereClause}
                 ORDER BY o.created_at DESC
@@ -162,10 +175,22 @@ class TrackingController extends Controller
             $countSql = "
                 SELECT COUNT(*) as total
                 FROM orders o
-                LEFT JOIN shipping_tracking st ON o.order_id = st.order_id
-                LEFT JOIN shippers s ON st.shipper_id = s.user_id
+                LEFT JOIN (
+                    SELECT stx.order_id, MAX(stx.shipper_id) AS shipper_id
+                    FROM shipping_tracking stx
+                    INNER JOIN (
+                        SELECT order_id, MAX(last_updated) AS max_last_updated
+                        FROM shipping_tracking
+                        GROUP BY order_id
+                    ) latest_st
+                        ON latest_st.order_id = stx.order_id
+                        AND latest_st.max_last_updated = stx.last_updated
+                    GROUP BY stx.order_id
+                ) st_current ON o.order_id = st_current.order_id
+                LEFT JOIN shippers s ON st_current.shipper_id = s.user_id
                 LEFT JOIN users u ON s.user_id = u.user_id
                 LEFT JOIN customers c ON o.customer_id = c.user_id
+                LEFT JOIN users cu ON c.user_id = cu.user_id
                 {$whereClause}
             ";
 
