@@ -3,9 +3,10 @@ declare(strict_types=1);
 
 namespace App\Controllers;
 
-use App\Core\{Controller, Request, Response, Container};
-use App\Support\ResponseHelper;
+use App\Core\{Controller, Request, Response, Container, Validator};
+use App\Support\{GeocodingService, ResponseHelper};
 use Exception;
+use PDO;
 
 class AdminController extends Controller 
 {
@@ -522,9 +523,18 @@ class AdminController extends Controller
                         $stmt->execute([$userId, $roleId]);
                     }
                 }
-                
+
+                $userIdInt = (int) $userId;
+                if (isset($data['address']) && is_array($data['address'])) {
+                    $addrResult = $this->tryInsertAddressForUser($pdo, $userIdInt, $data['address']);
+                    if (!$addrResult['ok']) {
+                        $pdo->rollBack();
+                        return $res->json(ResponseHelper::validationError($addrResult['errors'] ?? ['address' => 'Invalid address']));
+                    }
+                }
+
                 $pdo->commit();
-                return $res->json(ResponseHelper::success(null, 'User created successfully'));
+                return $res->json(ResponseHelper::success(['user_id' => $userIdInt], 'User created successfully'));
                 
             } catch (Exception $e) {
                 $pdo->rollBack();
@@ -686,5 +696,174 @@ class AdminController extends Controller
         } catch (Exception $e) {
             return $res->json(ResponseHelper::serverError('Failed to fetch addresses: ' . $e->getMessage()));
         }
+    }
+
+    /**
+     * POST /api/backend/v1/users/{id}/addresses — Tạo địa chỉ cho user (admin)
+     */
+    public function createUserAddress(Request $req, Response $res)
+    {
+        try {
+            $userId = (int) $req->getAttribute('id');
+            if ($userId <= 0) {
+                return $res->json(ResponseHelper::validationError(['id' => 'Invalid user id']));
+            }
+            $pdo = $this->container->database()->getConnection();
+            $stmt = $pdo->prepare('SELECT user_id FROM users WHERE user_id = ?');
+            $stmt->execute([$userId]);
+            if (!$stmt->fetch()) {
+                return $res->json(ResponseHelper::notFound('User not found'));
+            }
+            $data = $req->json() ?? [];
+            $result = $this->tryInsertAddressForUser($pdo, $userId, $data);
+            if (!empty($result['skip'])) {
+                return $res->json(ResponseHelper::validationError([
+                    'address' => 'Vui lòng gửi đầy đủ thông tin địa chỉ (người nhận, SĐT, số nhà, phường/xã, quận/huyện, tỉnh/thành).',
+                ]));
+            }
+            if (!$result['ok']) {
+                return $res->json(ResponseHelper::validationError($result['errors'] ?? []));
+            }
+            return $res->json(ResponseHelper::success(['address_id' => $result['address_id']], 'Address created'), 201);
+        } catch (Exception $e) {
+            return $res->json(ResponseHelper::serverError('Failed to create address: ' . $e->getMessage()));
+        }
+    }
+
+    /**
+     * PUT /api/backend/v1/users/{id}/addresses/{addressId} — Cập nhật địa chỉ user (admin)
+     */
+    public function updateUserAddress(Request $req, Response $res)
+    {
+        try {
+            $userId = (int) $req->getAttribute('id');
+            $addressId = (int) $req->getAttribute('addressId');
+            if ($userId <= 0 || $addressId <= 0) {
+                return $res->json(ResponseHelper::validationError(['id' => 'Invalid user or address id']));
+            }
+            $pdo = $this->container->database()->getConnection();
+            $stmt = $pdo->prepare('SELECT address_id FROM addresses WHERE address_id = ? AND user_id = ?');
+            $stmt->execute([$addressId, $userId]);
+            if (!$stmt->fetch()) {
+                return $res->json(ResponseHelper::notFound('Address not found'));
+            }
+            $data = $req->json() ?? [];
+            $validator = Validator::make($data, [
+                'receiver_name' => 'required',
+                'phone' => 'required|phone_vn',
+                'address_line' => 'required',
+                'ward' => 'required',
+                'district' => 'required',
+                'province' => 'required',
+            ]);
+            if (!$validator->validate()) {
+                return $res->json(ResponseHelper::validationError($validator->getErrors()));
+            }
+            $isDefault = !empty($data['is_default']);
+            $phone = preg_replace('/\D/', '', (string) $data['phone']);
+            $addressLine = trim((string) $data['address_line']);
+            $ward = trim((string) $data['ward']);
+            $district = trim((string) $data['district']);
+            $province = trim((string) $data['province']);
+            $coordinates = GeocodingService::resolveFromParts($addressLine, $ward, $district, $province);
+            if (!$coordinates) {
+                return $res->json(ResponseHelper::validationError([
+                    'address_line' => 'Không thể xác định tọa độ cho địa chỉ này. Vui lòng kiểm tra lại thông tin địa chỉ.',
+                ]));
+            }
+            if ($isDefault) {
+                $pdo->prepare('UPDATE addresses SET is_default = 0 WHERE user_id = ?')->execute([$userId]);
+            }
+            $sql = 'UPDATE addresses SET receiver_name = ?, phone = ?, address_line = ?, ward = ?, district = ?, province = ?, is_default = ?, lat = ?, lng = ? WHERE address_id = ? AND user_id = ?';
+            $stmt = $pdo->prepare($sql);
+            $stmt->execute([
+                trim((string) $data['receiver_name']),
+                $phone,
+                $addressLine,
+                $ward,
+                $district,
+                $province,
+                $isDefault ? 1 : 0,
+                $coordinates['lat'],
+                $coordinates['lng'],
+                $addressId,
+                $userId,
+            ]);
+            return $res->json(ResponseHelper::success(null, 'Address updated'));
+        } catch (Exception $e) {
+            return $res->json(ResponseHelper::serverError('Failed to update address: ' . $e->getMessage()));
+        }
+    }
+
+    /**
+     * @param array<string, mixed> $addr
+     * @return array{ok: bool, errors?: array<string, mixed>, address_id?: int, skip?: bool}
+     */
+    private function tryInsertAddressForUser(PDO $pdo, int $userId, array $addr): array
+    {
+        $keys = ['receiver_name', 'phone', 'address_line', 'ward', 'district', 'province'];
+        $any = false;
+        $all = true;
+        foreach ($keys as $k) {
+            $v = isset($addr[$k]) ? trim((string) $addr[$k]) : '';
+            if ($v !== '') {
+                $any = true;
+            } else {
+                $all = false;
+            }
+        }
+        if (!$any) {
+            return ['ok' => true, 'skip' => true];
+        }
+        if (!$all) {
+            return [
+                'ok' => false,
+                'errors' => ['address' => 'Điền đủ người nhận, SĐT, số nhà, phường/xã, quận/huyện, tỉnh/thành hoặc để trống toàn bộ phần địa chỉ.'],
+            ];
+        }
+        $validator = Validator::make($addr, [
+            'receiver_name' => 'required',
+            'phone' => 'required|phone_vn',
+            'address_line' => 'required',
+            'ward' => 'required',
+            'district' => 'required',
+            'province' => 'required',
+        ]);
+        if (!$validator->validate()) {
+            return ['ok' => false, 'errors' => $validator->getErrors()];
+        }
+        $isDefault = !empty($addr['is_default']);
+        $phone = preg_replace('/\D/', '', (string) $addr['phone']);
+        $addressLine = trim((string) $addr['address_line']);
+        $ward = trim((string) $addr['ward']);
+        $district = trim((string) $addr['district']);
+        $province = trim((string) $addr['province']);
+        $coordinates = GeocodingService::resolveFromParts($addressLine, $ward, $district, $province);
+        if (!$coordinates) {
+            return [
+                'ok' => false,
+                'errors' => [
+                    'address_line' => 'Không thể xác định tọa độ cho địa chỉ này. Vui lòng kiểm tra lại thông tin địa chỉ.',
+                ],
+            ];
+        }
+        if ($isDefault) {
+            $pdo->prepare('UPDATE addresses SET is_default = 0 WHERE user_id = ?')->execute([$userId]);
+        }
+        $sql = 'INSERT INTO addresses (user_id, receiver_name, phone, address_line, ward, district, province, is_default, lat, lng) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)';
+        $stmt = $pdo->prepare($sql);
+        $stmt->execute([
+            $userId,
+            trim((string) $addr['receiver_name']),
+            $phone,
+            $addressLine,
+            $ward,
+            $district,
+            $province,
+            $isDefault ? 1 : 0,
+            $coordinates['lat'],
+            $coordinates['lng'],
+        ]);
+        return ['ok' => true, 'address_id' => (int) $pdo->lastInsertId()];
     }
 }

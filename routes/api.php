@@ -184,6 +184,8 @@ $router->delete('/api/backend/v1/inventory/{id}', [InventoryController::class, '
 // ========================================
 $router->get('/api/backend/v1/users', [AdminController::class, 'getUsers'], [new AuthMiddleware($container)]);
 $router->get('/api/backend/v1/users/{id}/addresses', [AdminController::class, 'getUserAddresses'], [new AuthMiddleware($container)]);
+$router->post('/api/backend/v1/users/{id}/addresses', [AdminController::class, 'createUserAddress'], [new AuthMiddleware($container)]);
+$router->put('/api/backend/v1/users/{id}/addresses/{addressId}', [AdminController::class, 'updateUserAddress'], [new AuthMiddleware($container)]);
 $router->get('/api/backend/v1/users/stats', [AdminController::class, 'getUserStats'], [new AuthMiddleware($container)]);
 $router->post('/api/backend/v1/users', [AdminController::class, 'createUser'], [new AuthMiddleware($container)]);
 $router->put('/api/backend/v1/users/{id}', [AdminController::class, 'updateUser'], [new AuthMiddleware($container)]);
