@@ -1,16 +1,22 @@
 version: "3.8"
 
+networks:
+  shopswift-network:
+    driver: bridge
+
 services:
   nginx:
     image: nginx:latest
     container_name: nginx-shopswift
     ports:
-      - "8081:80"
+      - "8000:80"
     volumes:
       - .:/var/www
       - ./docker/nginx/default.conf:/etc/nginx/conf.d/default.conf
     depends_on:
       - php
+    networks:
+      - shopswift-network
 
   php:
     build:
@@ -22,6 +28,10 @@ services:
     working_dir: /var/www
     env_file:
       - .env
+    depends_on:
+      - mysql
+    networks:
+      - shopswift-network
 
   mysql:
     image: mysql:8.0
@@ -29,18 +39,24 @@ services:
     restart: always
     environment:
       MYSQL_ROOT_PASSWORD: 123456
-      MYSQL_DATABASE: ecommerce_db
+      MYSQL_DATABASE: shopswift
     ports:
       - "3306:3306"
     volumes:
       - mysql_data:/var/lib/mysql
     command: --default-authentication-plugin=mysql_native_password
+    networks:
+      - shopswift-network
 
   adminer:
     image: adminer
     container_name: adminer-shopswift
     ports:
       - "8080:8080"
+    depends_on:
+      - mysql
+    networks:
+      - shopswift-network
 
 volumes:
   mysql_data:
