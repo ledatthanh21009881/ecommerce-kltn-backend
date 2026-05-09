@@ -14,7 +14,7 @@ use Exception;
 class NotificationService
 {
     private PDO $pdo;
-    private FirebaseService $firebaseService;
+    private ?FirebaseService $firebaseService = null;
 
     public function __construct(PDO $pdo)
     {
