@@ -33,6 +33,7 @@ $router->post('/api/v1/auth/reset-password', [AuthController::class, 'resetPassw
 $router->get('/api/v1/auth/me', [AuthController::class, 'profile'], [new AuthMiddleware($container)]);
 $router->get('/api/v1/auth/check-admin', [AuthController::class, 'checkAdminRole'], [new AuthMiddleware($container)]);
 $router->put('/api/v1/auth/profile', [AuthController::class, 'updateProfile'], [new AuthMiddleware($container)]);
+$router->post('/api/v1/auth/avatar', [AuthController::class, 'uploadAvatar'], [new AuthMiddleware($container)]);
 $router->post('/api/v1/auth/change-password', [AuthController::class, 'changePassword'], [new AuthMiddleware($container)]);
 
 // ========================================
