@@ -126,8 +126,12 @@ class PayOSPaymentService implements PaymentServiceInterface
                 $d = $json['data'];
                 $paymentUrl = $d['checkoutUrl'] ?? $d['paymentLink'] ?? null;
                 $qrCode = $d['qrCode'] ?? null;
-                if ($paymentUrl) {
-                    $this->paymentModel->updatePaymentUrl($paymentId, $paymentUrl);
+                if ($paymentUrl || $qrCode) {
+                    try {
+                        $this->paymentModel->updatePayOsDisplayData($paymentId, $paymentUrl, $qrCode);
+                    } catch (\PDOException $e) {
+                        error_log('[PayOS] Could not save qr_code — run migration 2026_payments_qr_code.sql: ' . $e->getMessage());
+                    }
                 }
                 $bankAccount = [
                     'account_number' => $d['accountNumber'] ?? '',
@@ -159,5 +163,45 @@ class PayOSPaymentService implements PaymentServiceInterface
         $signature = $data['signature'] ?? '';
         unset($data['signature']);
         return $this->verifyWebhookSignature($data, $signature);
+    }
+
+    /**
+     * GET /v2/payment-requests/{orderCode} — refresh QR when reopening admin dialog.
+     */
+    public function fetchPaymentByOrderCode(int $orderCode): ?array
+    {
+        if ($orderCode <= 0 || $this->clientId === '' || $this->apiKey === '') {
+            return null;
+        }
+
+        $endpoint = $this->apiUrl . '/v2/payment-requests/' . $orderCode;
+        $ch = curl_init($endpoint);
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_HTTPHEADER => [
+                'Content-Type: application/json',
+                'x-client-id: ' . $this->clientId,
+                'x-api-key: ' . $this->apiKey,
+            ],
+            CURLOPT_TIMEOUT => 15,
+        ]);
+        $response = curl_exec($ch);
+        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+
+        if ($httpCode !== 200 || !$response) {
+            return null;
+        }
+
+        $json = json_decode($response, true);
+        if (!is_array($json) || ($json['code'] ?? '') !== '00' || empty($json['data'])) {
+            return null;
+        }
+
+        $d = $json['data'];
+        return [
+            'payment_url' => $d['checkoutUrl'] ?? $d['paymentLink'] ?? null,
+            'qr_code' => $d['qrCode'] ?? null,
+        ];
     }
 }

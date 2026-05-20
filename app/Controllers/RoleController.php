@@ -5,7 +5,7 @@ namespace App\Controllers;
 
 use App\Core\{Controller, Request, Response, Container};
 use App\Domain\Roles\Role;
-use App\Support\ResponseHelper;
+use App\Support\{ResponseHelper, PanelRole};
 use Exception;
 
 class RoleController extends Controller
@@ -195,11 +195,150 @@ class RoleController extends Controller
     {
         try {
             $roles = $this->roleModel->getAll();
+            $scope = $req->query('scope');
+            if ($scope === 'panel') {
+                $roles = array_values(array_filter(
+                    $roles,
+                    static fn (array $r) => PanelRole::isPanelRole((string) ($r['role_name'] ?? ''))
+                ));
+            } elseif ($scope === 'external') {
+                $roles = array_values(array_filter(
+                    $roles,
+                    static fn (array $r) => PanelRole::isExternal((string) ($r['role_name'] ?? ''))
+                ));
+            }
 
             return $res->json(ResponseHelper::success($roles));
         } catch (Exception $e) {
             return $res->json(ResponseHelper::serverError('Failed to fetch roles: ' . $e->getMessage()));
         }
+    }
+
+    public function listPanel(Request $req, Response $res)
+    {
+        try {
+            $page = max(1, (int) ($req->query('page') ?? 1));
+            $limit = min(100, max(1, (int) ($req->query('limit') ?? 20)));
+            $offset = ($page - 1) * $limit;
+            $search = $req->query('search');
+            $search = is_string($search) && $search !== '' ? $search : null;
+
+            $roles = $this->roleModel->getPanelRolesWithPagination($search, $limit, $offset);
+            $total = $this->roleModel->getPanelRoleCount($search);
+
+            return $res->json(ResponseHelper::success([
+                'roles' => $roles,
+                'pagination' => [
+                    'page' => $page,
+                    'limit' => $limit,
+                    'total' => $total,
+                    'total_pages' => (int) ceil($total / $limit),
+                ],
+            ]));
+        } catch (Exception $e) {
+            return $res->json(ResponseHelper::serverError('Failed to fetch panel roles: ' . $e->getMessage()));
+        }
+    }
+
+    public function storePanel(Request $req, Response $res)
+    {
+        try {
+            $data = $req->json();
+            $errors = $this->validateRoleData($data);
+            if ($errors !== []) {
+                return $res->json(ResponseHelper::error('Validation failed', 400, $errors));
+            }
+
+            $roleName = $this->normalizeRoleName((string) $data['role_name']);
+            if (!PanelRole::isPanelRole($roleName)) {
+                return $res->json(ResponseHelper::error('Cannot create external roles from admin panel', 400));
+            }
+
+            $roleId = $this->roleModel->create(['role_name' => $roleName]);
+
+            return $res->json(ResponseHelper::success(['role_id' => $roleId], 'Role created successfully'), 201);
+        } catch (Exception $e) {
+            $msg = $e->getMessage();
+            $code = str_contains($msg, 'already exists') ? 409 : 500;
+            return $res->json(ResponseHelper::error($code === 409 ? $msg : 'Failed to create role: ' . $msg), $code);
+        }
+    }
+
+    public function updatePanel(Request $req, Response $res)
+    {
+        $roleId = (int) $req->getAttribute('id');
+        if ($roleId <= 0) {
+            return $res->json(ResponseHelper::error('Role ID is required'), 400);
+        }
+
+        try {
+            $existing = $this->roleModel->findById($roleId);
+            if (!$existing) {
+                return $res->json(ResponseHelper::notFound('Role not found'));
+            }
+
+            $data = $req->json();
+            $errors = $this->validateRoleData($data);
+            if ($errors !== []) {
+                return $res->json(ResponseHelper::error('Validation failed', 400, $errors));
+            }
+
+            $roleName = $this->normalizeRoleName((string) $data['role_name']);
+            if (strtolower((string) $existing['role_name']) === 'admin' && $roleName !== 'admin') {
+                return $res->json(ResponseHelper::forbidden('Cannot rename the admin role'));
+            }
+            if (!PanelRole::isPanelRole($roleName)) {
+                return $res->json(ResponseHelper::error('Invalid role name for panel'), 400);
+            }
+
+            $this->roleModel->update($roleId, ['role_name' => $roleName]);
+
+            return $res->json(ResponseHelper::success(null, 'Role updated successfully'));
+        } catch (Exception $e) {
+            $msg = $e->getMessage();
+            $code = str_contains($msg, 'already exists') ? 409 : 500;
+            return $res->json(ResponseHelper::error($code === 409 ? $msg : 'Failed to update role: ' . $msg), $code);
+        }
+    }
+
+    public function destroyPanel(Request $req, Response $res)
+    {
+        $roleId = (int) $req->getAttribute('id');
+        if ($roleId <= 0) {
+            return $res->json(ResponseHelper::error('Role ID is required'), 400);
+        }
+
+        try {
+            $existing = $this->roleModel->findById($roleId);
+            if (!$existing) {
+                return $res->json(ResponseHelper::notFound('Role not found'));
+            }
+
+            if (strtolower((string) $existing['role_name']) === 'admin') {
+                return $res->json(ResponseHelper::forbidden('Cannot delete the admin role'));
+            }
+
+            $deleted = $this->roleModel->delete($roleId);
+            if (!$deleted) {
+                return $res->json(ResponseHelper::notFound('Role not found'));
+            }
+
+            return $res->json(ResponseHelper::success(null, 'Role deleted successfully'));
+        } catch (Exception $e) {
+            $msg = $e->getMessage();
+            if (str_contains($msg, 'assigned users')) {
+                return $res->json(ResponseHelper::error($msg), 409);
+            }
+            return $res->json(ResponseHelper::serverError('Failed to delete role: ' . $msg));
+        }
+    }
+
+    private function normalizeRoleName(string $name): string
+    {
+        $name = strtolower(trim($name));
+        $name = preg_replace('/\s+/', '_', $name) ?? $name;
+
+        return $name;
     }
 
     /**

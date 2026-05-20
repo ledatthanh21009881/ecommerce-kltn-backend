@@ -582,6 +582,59 @@ class ShipperController extends Controller
     }
 
     /**
+     * PATCH/PUT /api/v1/shipper/availability — Shipper bật/tắt trạng thái nhận đơn (mobile app).
+     */
+    public function updateMyAvailability(Request $req, Response $res): void
+    {
+        try {
+            $user = $req->getAttribute('user');
+            $shipperId = (int) ($user['user_id'] ?? 0);
+
+            if ($shipperId <= 0) {
+                $res->json(ResponseHelper::unauthorized('Shipper ID not found in token'));
+                return;
+            }
+
+            $stmt = $this->pdo->prepare('SELECT user_id, status FROM shippers WHERE user_id = ?');
+            $stmt->execute([$shipperId]);
+            $shipper = $stmt->fetch(PDO::FETCH_ASSOC);
+
+            if (!$shipper) {
+                $res->json(ResponseHelper::forbidden('User is not a shipper'));
+                return;
+            }
+
+            if (($shipper['status'] ?? '') !== 'active') {
+                $res->json(ResponseHelper::forbidden('Shipper account is not active'));
+                return;
+            }
+
+            $data = $req->json();
+            if (!array_key_exists('is_available', $data)) {
+                $res->json(ResponseHelper::validationError(['is_available' => 'is_available is required']));
+                return;
+            }
+
+            $isAvailable = filter_var($data['is_available'], FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE);
+            if ($isAvailable === null) {
+                $res->json(ResponseHelper::validationError(['is_available' => 'is_available must be a boolean']));
+                return;
+            }
+
+            $updateStmt = $this->pdo->prepare('UPDATE shippers SET is_available = ? WHERE user_id = ?');
+            $updateStmt->execute([$isAvailable ? 1 : 0, $shipperId]);
+
+            $res->json(ResponseHelper::success(
+                ['is_available' => $isAvailable],
+                $isAvailable ? 'You are now available for new orders' : 'You are now offline'
+            ));
+        } catch (Exception $e) {
+            error_log('[ShipperController] updateMyAvailability: ' . $e->getMessage());
+            $res->json(ResponseHelper::serverError('Failed to update availability: ' . $e->getMessage()));
+        }
+    }
+
+    /**
      * POST /api/v1/shipper/fcm-token - Register FCM token for push notifications
      * 
      * @param Request $req

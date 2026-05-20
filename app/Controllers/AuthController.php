@@ -6,7 +6,8 @@ namespace App\Controllers;
 use App\Core\{Controller, Request, Response};
 use App\Domain\Auth\{Account, User, RefreshToken};
 use App\Core\{Validator, Container};
-use App\Support\{ResponseHelper, JWT};
+use App\Support\{ResponseHelper, JWT, PanelRole};
+use App\Services\MenuPermissionService;
 use Exception;
 use PDO;
 
@@ -182,45 +183,60 @@ class AuthController extends Controller
                 return $res->json(ResponseHelper::unauthorized('Invalid admin credentials'));
             }
             
-            // Check if this is admin account (based on account_name since account_type doesn't have 'admin')
-            if ($account['account_name'] !== 'admin') {
-                return $res->json(ResponseHelper::forbidden('Access denied. Admin privileges required.'));
+            $user = $this->userModel->findByAccountId($account['account_id']);
+            if (!$user) {
+                return $res->json(ResponseHelper::forbidden('Access denied. No user profile for this account.'));
             }
 
-            // Reset failed attempts and update last login
-            // Temporarily use direct SQL to avoid model issues
+            $userId = (int) $user['user_id'];
+            $roles = $this->fetchRolesForUserId($userId);
+
+            if ($roles === [] || !PanelRole::hasAnyPanelRole($roles)) {
+                return $res->json(ResponseHelper::forbidden('Access denied. Admin panel privileges required.'));
+            }
+
+            $menuService = new MenuPermissionService($this->container->database());
+            $allowedMenus = $menuService->getMenusByUserId($userId);
+            $allowedMenusResponse = array_map(static function (array $m) {
+                return [
+                    'key' => $m['key'],
+                    'path' => $m['path'],
+                    'name' => $m['name'],
+                ];
+            }, $allowedMenus);
+
+            if ($allowedMenusResponse === []) {
+                return $res->json(ResponseHelper::forbidden('Access denied. No menu permissions assigned.'));
+            }
+
             $pdo = $this->container->database()->getConnection();
-            
-            // Reset failed attempts
+
             $resetSql = "UPDATE accounts SET failed_attempts = 0, last_failed_login_at = NULL, locked_until = NULL WHERE account_id = ?";
             $resetStmt = $pdo->prepare($resetSql);
             $resetStmt->execute([$account['account_id']]);
-            
-            // Update last login
+
             $loginSql = "UPDATE accounts SET last_login_at = NOW() WHERE account_id = ?";
             $loginStmt = $pdo->prepare($loginSql);
             $loginStmt->execute([$account['account_id']]);
-            
-            // Generate JWT token with admin privileges
+
+            $isAdmin = in_array('admin', $roles, true);
+            $orderActions = $this->resolveOrderActionsForUser($userId, $roles, $menuService);
+            $allowedPaths = array_column($allowedMenusResponse, 'path');
+            $primaryRole = $roles[0];
+
             $token = $this->jwt->encode([
+                'user_id' => $userId,
                 'account_id' => $account['account_id'],
                 'account_name' => $account['account_name'],
                 'account_type' => $account['account_type'],
-                'roles' => ['admin'],
-                'is_admin' => true
+                'roles' => $roles,
+                'is_admin' => $isAdmin,
+                'allowed_menu_paths' => $allowedPaths,
             ]);
-            
-            // Generate refresh token for admin
+
             $refreshToken = $this->refreshTokenModel->generateRefreshToken();
-            // For admin, we need to get the user_id from the account
-            $user = $this->userModel->findByAccountId($account['account_id']);
-            if ($user) {
-                $this->refreshTokenModel->createToken($user['user_id'], $refreshToken);
-            } else {
-                // If no user found, create refresh token with account_id as user_id
-                $this->refreshTokenModel->createToken($account['account_id'], $refreshToken);
-            }
-            
+            $this->refreshTokenModel->createToken($userId, $refreshToken);
+
             $locale = $account['preferred_locale'] ?? 'vi';
             if (!in_array($locale, ['vi', 'en'], true)) {
                 $locale = 'vi';
@@ -233,15 +249,104 @@ class AuthController extends Controller
                     'account_id' => $account['account_id'],
                     'account_name' => $account['account_name'],
                     'account_type' => $account['account_type'],
-                    'role' => 'admin',
+                    'role' => $primaryRole,
                     'preferred_locale' => $locale,
                 ],
-                'redirect' => '/admin/dashboard'
+                'roles' => $roles,
+                'allowed_menus' => $allowedMenusResponse,
+                'order_actions' => $orderActions,
+                'redirect' => $allowedPaths[0] ?? '/admin/dashboard',
             ], 'Admin login successful'));
             
         } catch (Exception $e) {
             return $res->json(ResponseHelper::serverError('Admin login failed: ' . $e->getMessage()));
         }
+    }
+
+    /**
+     * GET /api/v1/auth/admin/me — refresh roles + allowed menus từ DB.
+     */
+    public function adminMe(Request $req, Response $res)
+    {
+        $user = $req->getAttribute('user');
+        $payload = $req->getAttribute('token_payload') ?? [];
+
+        if (!is_array($user)) {
+            return $res->json(ResponseHelper::unauthorized('Invalid session'));
+        }
+
+        $userId = (int) ($user['user_id'] ?? $payload['user_id'] ?? 0);
+        if ($userId <= 0) {
+            return $res->json(ResponseHelper::unauthorized('User not found'));
+        }
+
+        try {
+            $roles = $this->fetchRolesForUserId($userId);
+            $menuService = new MenuPermissionService($this->container->database());
+            $allowedMenus = $menuService->getMenusByUserId($userId);
+            $allowedMenusResponse = array_map(static function (array $m) {
+                return [
+                    'key' => $m['key'],
+                    'path' => $m['path'],
+                    'name' => $m['name'],
+                ];
+            }, $allowedMenus);
+
+            $accountId = (int) ($user['account_id'] ?? $payload['account_id'] ?? 0);
+            $accountRow = null;
+            if ($accountId > 0) {
+                $pdo = $this->container->database()->getConnection();
+                $stmt = $pdo->prepare('SELECT account_id, account_name, account_type, preferred_locale FROM accounts WHERE account_id = ?');
+                $stmt->execute([$accountId]);
+                $accountRow = $stmt->fetch(PDO::FETCH_ASSOC) ?: null;
+            }
+
+            $orderActions = $this->resolveOrderActionsForUser($userId, $roles, $menuService);
+
+            return $res->json(ResponseHelper::success([
+                'account' => [
+                    'account_id' => $accountId,
+                    'account_name' => $accountRow['account_name'] ?? ($user['account_name'] ?? ''),
+                    'account_type' => $accountRow['account_type'] ?? ($user['account_type'] ?? 'local'),
+                    'role' => $roles[0] ?? 'staff',
+                    'preferred_locale' => $accountRow['preferred_locale'] ?? 'vi',
+                ],
+                'roles' => $roles,
+                'allowed_menus' => $allowedMenusResponse,
+                'order_actions' => $orderActions,
+            ]));
+        } catch (Exception $e) {
+            return $res->json(ResponseHelper::serverError('Failed to load admin session: ' . $e->getMessage()));
+        }
+    }
+
+    /**
+     * @param string[] $roles
+     * @return string[]
+     */
+    private function resolveOrderActionsForUser(int $userId, array $roles, MenuPermissionService $menuService): array
+    {
+        if (in_array('admin', $roles, true)) {
+            return ['orders.manage', 'orders.assign_shipper'];
+        }
+
+        return $menuService->getOrderActionsByUserId($userId);
+    }
+
+    /**
+     * @return string[]
+     */
+    private function fetchRolesForUserId(int $userId): array
+    {
+        $pdo = $this->container->database()->getConnection();
+        $stmt = $pdo->prepare("
+            SELECT r.role_name
+            FROM user_roles ur
+            JOIN roles r ON r.role_id = ur.role_id
+            WHERE ur.user_id = ?
+        ");
+        $stmt->execute([$userId]);
+        return array_column($stmt->fetchAll(PDO::FETCH_ASSOC), 'role_name');
     }
 
     /**

@@ -4,8 +4,10 @@ declare(strict_types=1);
 namespace App\Controllers;
 
 use App\Core\{Controller, Request, Response, Container};
-use App\Support\ResponseHelper;
+use App\Support\{ResponseHelper, PanelRole};
+use App\Services\MenuPermissionService;
 use Exception;
+use PDO;
 
 class AdminController extends Controller 
 {
@@ -93,7 +95,21 @@ class AdminController extends Controller
             $stmt->execute([$fromStr, $toStr]);
             $agg = $stmt->fetch(\PDO::FETCH_ASSOC) ?: ['c' => 0, 'rev' => 0];
 
-            // Chi phí nhập trong khoảng (chỉ phiếu đã xác nhận)
+            // Giá vốn hàng bán (COGS) = Σ (số lượng bán × cost_price sản phẩm)
+            $stmt = $pdo->prepare("
+                SELECT COALESCE(SUM(oi.quantity * COALESCE(p.cost_price, 0)), 0) AS cogs
+                FROM order_items oi
+                INNER JOIN orders o ON oi.order_id = o.order_id
+                INNER JOIN product_variants pv ON oi.variant_id = pv.variant_id
+                INNER JOIN products p ON pv.product_id = p.product_id
+                WHERE o.status NOT IN ('cancelled', 'returned')
+                  AND DATE(o.created_at) BETWEEN ? AND ?
+            ");
+            $stmt->execute([$fromStr, $toStr]);
+            $cogsAgg = $stmt->fetch(\PDO::FETCH_ASSOC) ?: ['cogs' => 0];
+            $totalCogs = (float) ($cogsAgg['cogs'] ?? 0);
+
+            // Chi phí nhập trong khoảng (chỉ phiếu đã xác nhận) — báo cáo kho, không dùng cho lợi nhuận gộp
             $stmt = $pdo->prepare("
                 SELECT COALESCE(SUM(pi.subtotal), 0) AS purchase_cost
                 FROM purchase_receipts pr
@@ -233,11 +249,12 @@ class AdminController extends Controller
                 ];
             }
 
-            $grossProfit = (float) ($agg['rev'] ?? 0) - $totalPurchaseCost;
+            $grossProfit = (float) ($agg['rev'] ?? 0) - $totalCogs;
 
             return $res->json(ResponseHelper::success([
                 'total_orders' => (int) ($agg['c'] ?? 0),
                 'total_revenue' => (float) ($agg['rev'] ?? 0),
+                'total_cogs' => $totalCogs,
                 'total_purchase_cost' => $totalPurchaseCost,
                 'gross_profit' => $grossProfit,
                 'total_products' => $total_products,
@@ -267,6 +284,8 @@ class AdminController extends Controller
             $limit = (int)($req->query('limit') ?? 10);
             $search = $req->query('search', '');
             $role = $req->query('role', '');
+            $scope = $req->query('scope', 'external');
+            $status = $req->query('status', '');
             
             $offset = ($page - 1) * $limit;
             
@@ -286,6 +305,14 @@ class AdminController extends Controller
                 $whereConditions[] = "r.role_name = ?";
                 $params[] = $role;
             }
+
+            if ($status === 'active') {
+                $whereConditions[] = 'a.is_active = 1';
+            } elseif ($status === 'inactive') {
+                $whereConditions[] = 'a.is_active = 0';
+            }
+
+            $whereConditions[] = $this->scopeSqlCondition($scope);
             
             $whereClause = implode(' AND ', $whereConditions);
             
@@ -475,35 +502,47 @@ class AdminController extends Controller
      */
     public function createUser(Request $req, Response $res)
     {
+        $data = $req->json();
+        $data['scope'] = $data['scope'] ?? 'external';
+        return $this->createUserFromData($res, $data);
+    }
+
+    private function createUserFromData(Response $res, array $data): void
+    {
         try {
-            $data = $req->json();
-            
-            // Validate required fields
             $required = ['account_name', 'password', 'first_name', 'last_name', 'email', 'role_ids'];
             foreach ($required as $field) {
                 if (empty($data[$field])) {
-                    return $res->json(ResponseHelper::error("Field '{$field}' is required"));
+                    $res->json(ResponseHelper::error("Field '{$field}' is required"));
+                    return;
                 }
             }
-            
+
+            $scope = $data['scope'] ?? 'external';
+            if (!$this->validateRoleIdsForScope($data['role_ids'], $scope)) {
+                $res->json(ResponseHelper::error('Invalid role assignment for this user type'));
+                return;
+            }
+
+            $isActive = !isset($data['is_active']) || (bool) $data['is_active'];
+
             $pdo = $this->container->database()->getConnection();
             $pdo->beginTransaction();
-            
+
             try {
-                // Create account
                 $stmt = $pdo->prepare("
-                    INSERT INTO accounts (account_name, password, account_type, is_active, created_at) 
-                    VALUES (?, ?, 'local', 1, NOW())
+                    INSERT INTO accounts (account_name, password, account_type, is_active, created_at)
+                    VALUES (?, ?, 'local', ?, NOW())
                 ");
                 $stmt->execute([
                     $data['account_name'],
-                    password_hash($data['password'], PASSWORD_DEFAULT)
+                    password_hash($data['password'], PASSWORD_DEFAULT),
+                    $isActive ? 1 : 0,
                 ]);
                 $accountId = $pdo->lastInsertId();
-                
-                // Create user
+
                 $stmt = $pdo->prepare("
-                    INSERT INTO users (account_id, first_name, last_name, email, phone) 
+                    INSERT INTO users (account_id, first_name, last_name, email, phone)
                     VALUES (?, ?, ?, ?, ?)
                 ");
                 $stmt->execute([
@@ -511,28 +550,31 @@ class AdminController extends Controller
                     $data['first_name'],
                     $data['last_name'],
                     $data['email'],
-                    $data['phone'] ?? null
+                    $data['phone'] ?? null,
                 ]);
                 $userId = $pdo->lastInsertId();
-                
-                // Assign roles
-                if (is_array($data['role_ids'])) {
-                    foreach ($data['role_ids'] as $roleId) {
-                        $stmt = $pdo->prepare("INSERT INTO user_roles (user_id, role_id) VALUES (?, ?)");
-                        $stmt->execute([$userId, $roleId]);
-                    }
+
+                foreach ($data['role_ids'] as $roleId) {
+                    $stmt = $pdo->prepare('INSERT INTO user_roles (user_id, role_id) VALUES (?, ?)');
+                    $stmt->execute([$userId, $roleId]);
                 }
-                
+
                 $pdo->commit();
-                return $res->json(ResponseHelper::success(null, 'User created successfully'));
-                
+                $res->json(ResponseHelper::success(['user_id' => (int) $userId], 'User created successfully'));
+                return;
             } catch (Exception $e) {
                 $pdo->rollBack();
                 throw $e;
             }
-            
         } catch (Exception $e) {
-            return $res->json(ResponseHelper::serverError('Failed to create user: ' . $e->getMessage()));
+            $msg = $e->getMessage();
+            $code = str_contains($msg, 'Duplicate') || str_contains($msg, '1062') ? 409 : 500;
+            $res->json(
+                $code === 409
+                    ? ResponseHelper::error($msg, 409)
+                    : ResponseHelper::serverError('Failed to create user: ' . $msg),
+                $code
+            );
         }
     }
 
@@ -541,21 +583,28 @@ class AdminController extends Controller
      */
     public function updateUser(Request $req, Response $res)
     {
+        $userId = (int) $req->getAttribute('id');
+        $data = $req->json();
+        $data['scope'] = $data['scope'] ?? 'external';
+        return $this->updateUserFromData($res, $userId, $data);
+    }
+
+    private function updateUserFromData(Response $res, int $userId, array $data): void
+    {
         try {
-            $userId = $req->getAttribute('id');
-            $data = $req->json();
-            
-            if (!$userId) {
-                return $res->json(ResponseHelper::error('User ID is required'));
+            if ($userId <= 0) {
+                $res->json(ResponseHelper::error('User ID is required'));
+                return;
             }
-            
+
             $pdo = $this->container->database()->getConnection();
             
             // Check if user exists
             $stmt = $pdo->prepare("SELECT user_id FROM users WHERE user_id = ?");
             $stmt->execute([$userId]);
             if (!$stmt->fetch()) {
-                return $res->json(ResponseHelper::notFound('User not found'));
+                $res->json(ResponseHelper::notFound('User not found'));
+                return;
             }
             
             // Update user info
@@ -588,21 +637,48 @@ class AdminController extends Controller
             
             // Update roles if provided
             if (isset($data['role_ids']) && is_array($data['role_ids'])) {
-                // Remove existing roles
+                $scope = $data['scope'] ?? 'external';
+                if (!$this->validateRoleIdsForScope($data['role_ids'], $scope)) {
+                    $res->json(ResponseHelper::error('Invalid role assignment for this user type'));
+                    return;
+                }
+
                 $stmt = $pdo->prepare("DELETE FROM user_roles WHERE user_id = ?");
                 $stmt->execute([$userId]);
                 
-                // Add new roles
                 foreach ($data['role_ids'] as $roleId) {
                     $stmt = $pdo->prepare("INSERT INTO user_roles (user_id, role_id) VALUES (?, ?)");
                     $stmt->execute([$userId, $roleId]);
                 }
             }
+
+            if (isset($data['password']) && $data['password'] !== '') {
+                $stmt = $pdo->prepare("SELECT account_id FROM users WHERE user_id = ?");
+                $stmt->execute([$userId]);
+                $row = $stmt->fetch();
+                if ($row) {
+                    $stmt = $pdo->prepare("UPDATE accounts SET password = ? WHERE account_id = ?");
+                    $stmt->execute([
+                        password_hash($data['password'], PASSWORD_DEFAULT),
+                        $row['account_id'],
+                    ]);
+                }
+            }
+
+            if (isset($data['is_active'])) {
+                $stmt = $pdo->prepare("SELECT account_id FROM users WHERE user_id = ?");
+                $stmt->execute([$userId]);
+                $row = $stmt->fetch();
+                if ($row) {
+                    $stmt = $pdo->prepare("UPDATE accounts SET is_active = ? WHERE account_id = ?");
+                    $stmt->execute([(int) (bool) $data['is_active'], $row['account_id']]);
+                }
+            }
             
-            return $res->json(ResponseHelper::success(null, 'User updated successfully'));
+            $res->json(ResponseHelper::success(null, 'User updated successfully'));
             
         } catch (Exception $e) {
-            return $res->json(ResponseHelper::serverError('Failed to update user: ' . $e->getMessage()));
+            $res->json(ResponseHelper::serverError('Failed to update user: ' . $e->getMessage()));
         }
     }
 
@@ -686,5 +762,210 @@ class AdminController extends Controller
         } catch (Exception $e) {
             return $res->json(ResponseHelper::serverError('Failed to fetch addresses: ' . $e->getMessage()));
         }
+    }
+
+    public function getAccounts(Request $req, Response $res)
+    {
+        $req->setAttribute('scope', 'internal');
+        return $this->getUsersInternalScoped($req, $res, true);
+    }
+
+    public function getAccountStats(Request $req, Response $res)
+    {
+        try {
+            $pdo = $this->container->database()->getConnection();
+            $panelWhere = $this->panelUserExistsSql('u');
+
+            $base = "
+                FROM users u
+                JOIN accounts a ON u.account_id = a.account_id
+                WHERE {$panelWhere}
+            ";
+            $params = [];
+
+            $stmt = $pdo->prepare("SELECT COUNT(DISTINCT u.user_id) as total {$base}");
+            $stmt->execute($params);
+            $total = (int) $stmt->fetch()['total'];
+
+            $stmt = $pdo->prepare("SELECT COUNT(DISTINCT u.user_id) as active {$base} AND a.is_active = 1");
+            $stmt->execute($params);
+            $active = (int) $stmt->fetch()['active'];
+
+            $stmt = $pdo->prepare("
+                SELECT COUNT(DISTINCT u.user_id) as c {$base}
+                AND EXISTS (
+                    SELECT 1 FROM user_roles ur2 JOIN roles r2 ON r2.role_id = ur2.role_id
+                    WHERE ur2.user_id = u.user_id AND r2.role_name = 'admin'
+                )
+            ");
+            $stmt->execute($params);
+            $admins = (int) $stmt->fetch()['c'];
+
+            $staff = $total - $admins;
+
+            return $res->json(ResponseHelper::success([
+                'total_accounts' => $total,
+                'active_accounts' => $active,
+                'admins' => $admins,
+                'staff' => max(0, $staff),
+            ]));
+        } catch (Exception $e) {
+            return $res->json(ResponseHelper::serverError('Failed to get account stats: ' . $e->getMessage()));
+        }
+    }
+
+    public function createAccount(Request $req, Response $res)
+    {
+        $data = $req->json();
+        $data['scope'] = 'internal';
+        return $this->createUserFromData($res, $data);
+    }
+
+    public function updateAccount(Request $req, Response $res)
+    {
+        $userId = $req->getAttribute('id');
+        $data = $req->json();
+        $data['scope'] = 'internal';
+        return $this->updateUserFromData($res, (int) $userId, $data);
+    }
+
+    private function getUsersInternalScoped(Request $req, Response $res, bool $withMenuPreview): void
+    {
+        try {
+            $page = (int) ($req->query('page') ?? 1);
+            $limit = (int) ($req->query('limit') ?? 10);
+            $search = $req->query('search', '');
+            $role = $req->query('role', '');
+            $status = $req->query('status', '');
+            $offset = ($page - 1) * $limit;
+
+            $pdo = $this->container->database()->getConnection();
+            $whereConditions = ['1=1'];
+            $params = [];
+
+            if ($search) {
+                $whereConditions[] = "(u.first_name LIKE ? OR u.last_name LIKE ? OR u.email LIKE ? OR a.account_name LIKE ?)";
+                $searchTerm = "%{$search}%";
+                $params = array_merge($params, [$searchTerm, $searchTerm, $searchTerm, $searchTerm]);
+            }
+            if ($role) {
+                $whereConditions[] = "r.role_name = ?";
+                $params[] = $role;
+            }
+            if ($status === 'active') {
+                $whereConditions[] = 'a.is_active = 1';
+            } elseif ($status === 'inactive') {
+                $whereConditions[] = 'a.is_active = 0';
+            }
+            $whereConditions[] = $this->scopeSqlCondition('internal');
+            $whereClause = implode(' AND ', $whereConditions);
+
+            $countSql = "
+                SELECT COUNT(DISTINCT u.user_id) as total
+                FROM users u
+                JOIN accounts a ON u.account_id = a.account_id
+                LEFT JOIN user_roles ur ON u.user_id = ur.user_id
+                LEFT JOIN roles r ON ur.role_id = r.role_id
+                WHERE {$whereClause}
+            ";
+            $stmt = $pdo->prepare($countSql);
+            $stmt->execute($params);
+            $total = (int) $stmt->fetch()['total'];
+
+            $sql = "
+                SELECT u.user_id, u.first_name, u.last_name, u.email, u.phone,
+                       a.account_name, a.last_login_at, a.created_at, a.is_active,
+                       GROUP_CONCAT(DISTINCT r.role_name ORDER BY r.role_name SEPARATOR ',') as roles
+                FROM users u
+                JOIN accounts a ON u.account_id = a.account_id
+                LEFT JOIN user_roles ur ON u.user_id = ur.user_id
+                LEFT JOIN roles r ON ur.role_id = r.role_id
+                WHERE {$whereClause}
+                GROUP BY u.user_id, u.first_name, u.last_name, u.email, u.phone,
+                         a.account_name, a.last_login_at, a.created_at, a.is_active
+                ORDER BY u.user_id DESC
+                LIMIT ? OFFSET ?
+            ";
+            $stmt = $pdo->prepare($sql);
+            $stmt->execute(array_merge($params, [$limit, $offset]));
+            $users = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+            $menuService = new MenuPermissionService($this->container->database());
+
+            foreach ($users as &$user) {
+                $user['roles'] = $user['roles'] ? explode(',', $user['roles']) : [];
+                if ($withMenuPreview) {
+                    $user['menu_preview'] = $menuService->getMenuPreviewLabelsForUser((int) $user['user_id']);
+                }
+            }
+
+            $res->json(ResponseHelper::paginated($users, $total, $limit, $page));
+        } catch (Exception $e) {
+            $res->json(ResponseHelper::serverError('Failed to get accounts: ' . $e->getMessage()));
+        }
+    }
+
+    /** User có ít nhất một role panel (không phải customer/shipper). */
+    private function panelUserExistsSql(string $userAlias = 'u'): string
+    {
+        $external = "'" . implode("','", array_map('strtolower', PanelRole::EXTERNAL)) . "'";
+
+        return "EXISTS (
+            SELECT 1 FROM user_roles ur_p
+            JOIN roles r_p ON r_p.role_id = ur_p.role_id
+            WHERE ur_p.user_id = {$userAlias}.user_id
+            AND LOWER(r_p.role_name) NOT IN ({$external})
+        )";
+    }
+
+    private function scopeSqlCondition(string $scope): string
+    {
+        $external = "'" . implode("','", array_map('strtolower', PanelRole::EXTERNAL)) . "'";
+
+        if ($scope === 'internal') {
+            return $this->panelUserExistsSql('u');
+        }
+
+        return "EXISTS (
+                SELECT 1 FROM user_roles ur_s
+                JOIN roles r_s ON r_s.role_id = ur_s.role_id
+                WHERE ur_s.user_id = u.user_id AND LOWER(r_s.role_name) IN ({$external})
+            ) AND NOT EXISTS (
+                SELECT 1 FROM user_roles ur_i
+                JOIN roles r_i ON r_i.role_id = ur_i.role_id
+                WHERE ur_i.user_id = u.user_id AND LOWER(r_i.role_name) NOT IN ({$external})
+            )";
+    }
+
+    /**
+     * @param int[] $roleIds
+     */
+    private function validateRoleIdsForScope(array $roleIds, string $scope): bool
+    {
+        if ($roleIds === []) {
+            return false;
+        }
+
+        $pdo = $this->container->database()->getConnection();
+        $placeholders = implode(',', array_fill(0, count($roleIds), '?'));
+        $stmt = $pdo->prepare("SELECT role_id, role_name FROM roles WHERE role_id IN ({$placeholders})");
+        $stmt->execute($roleIds);
+        $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+        if (count($rows) !== count($roleIds)) {
+            return false;
+        }
+
+        foreach ($rows as $row) {
+            $name = (string) $row['role_name'];
+            if ($scope === 'internal' && !PanelRole::isPanelRole($name)) {
+                return false;
+            }
+            if ($scope === 'external' && !PanelRole::isExternal($name)) {
+                return false;
+            }
+        }
+
+        return true;
     }
 }

@@ -4,31 +4,23 @@ namespace App\Controllers;
 
 use App\Core\{Controller, Request, Response, Container};
 use App\Repositories\ShippingRepository;
-use App\Support\JWT;
-use App\Models\ActivityLog;
 
 class ShippingController extends Controller
 {
-    private $shippingRepository;
-    private $jwt;
+    private ShippingRepository $shippingRepository;
 
     public function __construct(Container $container)
     {
         parent::__construct($container);
         $this->shippingRepository = new ShippingRepository($container->database()->getConnection());
-        // Load JWT secret from config
-        $config = require __DIR__ . '/../config/app.php';
-        $this->jwt = new JWT($config['jwt']['secret']);
     }
 
     /**
-     * Lấy danh sách shipping methods
      * GET /api/backend/v1/shipping
      */
     public function index(Request $req, Response $res)
     {
         try {
-            // Lấy query parameters
             $active = $req->query('active');
             $sortBy = $req->query('sort_by', 'fee');
             $sortOrder = $req->query('sort_order', 'asc');
@@ -38,355 +30,240 @@ class ShippingController extends Controller
             return $res->json([
                 'success' => true,
                 'message' => 'Shipping methods retrieved successfully',
-                'data' => $methods
+                'data' => $methods,
             ], 200);
-
         } catch (\Exception $e) {
             return $res->json([
                 'success' => false,
-                'message' => 'Failed to retrieve shipping methods: ' . $e->getMessage()
+                'message' => 'Failed to retrieve shipping methods: ' . $e->getMessage(),
             ], 500);
         }
     }
 
     /**
-     * Lấy chi tiết một shipping method
      * GET /api/backend/v1/shipping/{id}
      */
     public function show(Request $req, Response $res)
     {
         try {
-            $id = $req->param('id');
+            $id = (int) $req->param('id');
             $method = $this->shippingRepository->getById($id);
 
             if (!$method) {
                 return $res->json([
                     'success' => false,
-                    'message' => 'Shipping method not found'
+                    'message' => 'Shipping method not found',
                 ], 404);
             }
 
             return $res->json([
                 'success' => true,
                 'message' => 'Shipping method retrieved successfully',
-                'data' => $method
+                'data' => $method,
             ], 200);
-
         } catch (\Exception $e) {
             return $res->json([
                 'success' => false,
-                'message' => 'Failed to retrieve shipping method: ' . $e->getMessage()
+                'message' => 'Failed to retrieve shipping method: ' . $e->getMessage(),
             ], 500);
         }
     }
 
     /**
-     * Tạo shipping method mới
      * POST /api/backend/v1/shipping
      */
-    public function store()
+    public function store(Request $req, Response $res)
     {
         try {
-            // Lấy token từ header
-            $token = $this->getBearerToken();
-            if (!$token) {
-                $this->jsonResponse([
-                    'success' => false,
-                    'message' => 'Authorization token required'
-                ], 401);
-                return;
-            }
+            $input = $req->json() ?? [];
 
-            // Verify token
-            $payload = $this->jwt->decode($token);
-            if (!$payload) {
-                $this->jsonResponse([
-                    'success' => false,
-                    'message' => 'Invalid or expired token'
-                ], 401);
-                return;
-            }
-
-            // Lấy dữ liệu từ request
-            $input = json_decode(file_get_contents('php://input'), true);
-
-            // Validate input
             $validation = $this->validateShippingMethod($input);
             if (!$validation['valid']) {
-                $this->jsonResponse([
+                return $res->json([
                     'success' => false,
-                    'message' => $validation['message']
+                    'message' => $validation['message'],
                 ], 400);
-                return;
             }
 
-            // Kiểm tra tên trùng lặp
             if ($this->shippingRepository->nameExists($input['name'])) {
-                $this->jsonResponse([
+                return $res->json([
                     'success' => false,
-                    'message' => 'Shipping method name already exists'
+                    'message' => 'Shipping method name already exists',
                 ], 400);
-                return;
             }
 
-            // Tạo shipping method
             $methodId = $this->shippingRepository->create($input);
 
-            if ($methodId) {
-                // Log activity
-                $this->logActivity($payload['user_id'], 'create', 'shipping_method', $methodId, $input);
-
-                $this->jsonResponse([
-                    'success' => true,
-                    'message' => 'Shipping method created successfully',
-                    'data' => ['shipping_method_id' => $methodId]
-                ], 201);
-            } else {
-                $this->jsonResponse([
+            if (!$methodId) {
+                return $res->json([
                     'success' => false,
-                    'message' => 'Failed to create shipping method'
+                    'message' => 'Failed to create shipping method',
                 ], 500);
             }
 
-        } catch (\Exception $e) {
-            $this->jsonResponse([
+            $this->logActivity($req, 'create', 'shipping_method', (int) $methodId, $input);
+
+            return $res->json([
+                'success' => true,
+                'message' => 'Shipping method created successfully',
+                'data' => ['shipping_method_id' => (int) $methodId],
+            ], 201);
+        } catch (\Throwable $e) {
+            return $res->json([
                 'success' => false,
-                'message' => 'Failed to create shipping method: ' . $e->getMessage()
+                'message' => 'Failed to create shipping method: ' . $e->getMessage(),
             ], 500);
         }
     }
 
     /**
-     * Cập nhật shipping method
      * PUT /api/backend/v1/shipping/{id}
      */
-    public function update($id)
+    public function update(Request $req, Response $res)
     {
         try {
-            // Lấy token từ header
-            $token = $this->getBearerToken();
-            if (!$token) {
-                $this->jsonResponse([
-                    'success' => false,
-                    'message' => 'Authorization token required'
-                ], 401);
-                return;
-            }
+            $id = (int) $req->param('id');
+            $input = $req->json() ?? [];
 
-            // Verify token
-            $payload = $this->jwt->decode($token);
-            if (!$payload) {
-                $this->jsonResponse([
-                    'success' => false,
-                    'message' => 'Invalid or expired token'
-                ], 401);
-                return;
-            }
-
-            // Kiểm tra shipping method tồn tại
             $existingMethod = $this->shippingRepository->getById($id);
             if (!$existingMethod) {
-                $this->jsonResponse([
+                return $res->json([
                     'success' => false,
-                    'message' => 'Shipping method not found'
+                    'message' => 'Shipping method not found',
                 ], 404);
-                return;
             }
 
-            // Lấy dữ liệu từ request
-            $input = json_decode(file_get_contents('php://input'), true);
-
-            // Validate input
             $validation = $this->validateShippingMethod($input, $id);
             if (!$validation['valid']) {
-                $this->jsonResponse([
+                return $res->json([
                     'success' => false,
-                    'message' => $validation['message']
+                    'message' => $validation['message'],
                 ], 400);
-                return;
             }
 
-            // Kiểm tra tên trùng lặp (trừ chính nó)
             if ($this->shippingRepository->nameExists($input['name'], $id)) {
-                $this->jsonResponse([
+                return $res->json([
                     'success' => false,
-                    'message' => 'Shipping method name already exists'
+                    'message' => 'Shipping method name already exists',
                 ], 400);
-                return;
             }
 
-            // Cập nhật shipping method
             $success = $this->shippingRepository->update($id, $input);
 
-            if ($success) {
-                // Log activity
-                $this->logActivity($payload['user_id'], 'update', 'shipping_method', $id, $input);
-
-                $this->jsonResponse([
-                    'success' => true,
-                    'message' => 'Shipping method updated successfully'
-                ], 200);
-            } else {
-                $this->jsonResponse([
+            if (!$success) {
+                return $res->json([
                     'success' => false,
-                    'message' => 'Failed to update shipping method'
+                    'message' => 'Failed to update shipping method',
                 ], 500);
             }
 
-        } catch (\Exception $e) {
-            $this->jsonResponse([
+            $this->logActivity($req, 'update', 'shipping_method', $id, $input);
+
+            return $res->json([
+                'success' => true,
+                'message' => 'Shipping method updated successfully',
+            ], 200);
+        } catch (\Throwable $e) {
+            return $res->json([
                 'success' => false,
-                'message' => 'Failed to update shipping method: ' . $e->getMessage()
+                'message' => 'Failed to update shipping method: ' . $e->getMessage(),
             ], 500);
         }
     }
 
     /**
-     * Xóa shipping method
      * DELETE /api/backend/v1/shipping/{id}
      */
-    public function destroy($id)
+    public function destroy(Request $req, Response $res)
     {
         try {
-            // Lấy token từ header
-            $token = $this->getBearerToken();
-            if (!$token) {
-                $this->jsonResponse([
-                    'success' => false,
-                    'message' => 'Authorization token required'
-                ], 401);
-                return;
-            }
+            $id = (int) $req->param('id');
 
-            // Verify token
-            $payload = $this->jwt->decode($token);
-            if (!$payload) {
-                $this->jsonResponse([
-                    'success' => false,
-                    'message' => 'Invalid or expired token'
-                ], 401);
-                return;
-            }
-
-            // Kiểm tra shipping method tồn tại
             $existingMethod = $this->shippingRepository->getById($id);
             if (!$existingMethod) {
-                $this->jsonResponse([
+                return $res->json([
                     'success' => false,
-                    'message' => 'Shipping method not found'
+                    'message' => 'Shipping method not found',
                 ], 404);
-                return;
             }
 
-            // Kiểm tra xem có đang được sử dụng trong orders không
             if ($this->shippingRepository->isUsedInOrders($id)) {
-                $this->jsonResponse([
+                return $res->json([
                     'success' => false,
-                    'message' => 'Cannot delete shipping method that is being used in orders'
+                    'message' => 'Cannot delete shipping method that is being used in orders',
                 ], 400);
-                return;
             }
 
-            // Xóa shipping method
             $success = $this->shippingRepository->delete($id);
 
-            if ($success) {
-                // Log activity
-                $this->logActivity($payload['user_id'], 'delete', 'shipping_method', $id, $existingMethod);
-
-                $this->jsonResponse([
-                    'success' => true,
-                    'message' => 'Shipping method deleted successfully'
-                ], 200);
-            } else {
-                $this->jsonResponse([
+            if (!$success) {
+                return $res->json([
                     'success' => false,
-                    'message' => 'Failed to delete shipping method'
+                    'message' => 'Failed to delete shipping method',
                 ], 500);
             }
 
-        } catch (\Exception $e) {
-            $this->jsonResponse([
+            $this->logActivity($req, 'delete', 'shipping_method', $id, $existingMethod);
+
+            return $res->json([
+                'success' => true,
+                'message' => 'Shipping method deleted successfully',
+            ], 200);
+        } catch (\Throwable $e) {
+            return $res->json([
                 'success' => false,
-                'message' => 'Failed to delete shipping method: ' . $e->getMessage()
+                'message' => 'Failed to delete shipping method: ' . $e->getMessage(),
             ], 500);
         }
     }
 
     /**
-     * Toggle trạng thái active/inactive
      * PATCH /api/backend/v1/shipping/{id}/toggle
      */
-    public function toggleStatus($id)
+    public function toggleStatus(Request $req, Response $res)
     {
         try {
-            // Lấy token từ header
-            $token = $this->getBearerToken();
-            if (!$token) {
-                $this->jsonResponse([
-                    'success' => false,
-                    'message' => 'Authorization token required'
-                ], 401);
-                return;
-            }
+            $id = (int) $req->param('id');
 
-            // Verify token
-            $payload = $this->jwt->decode($token);
-            if (!$payload) {
-                $this->jsonResponse([
-                    'success' => false,
-                    'message' => 'Invalid or expired token'
-                ], 401);
-                return;
-            }
-
-            // Kiểm tra shipping method tồn tại
             $existingMethod = $this->shippingRepository->getById($id);
             if (!$existingMethod) {
-                $this->jsonResponse([
+                return $res->json([
                     'success' => false,
-                    'message' => 'Shipping method not found'
+                    'message' => 'Shipping method not found',
                 ], 404);
-                return;
             }
 
-            // Toggle status
             $newStatus = $existingMethod['is_active'] ? 0 : 1;
             $success = $this->shippingRepository->updateStatus($id, $newStatus);
 
-            if ($success) {
-                // Log activity
-                $this->logActivity($payload['user_id'], 'update', 'shipping_method', $id, [
-                    'is_active' => $newStatus,
-                    'action' => 'toggle_status'
-                ]);
-
-                $this->jsonResponse([
-                    'success' => true,
-                    'message' => 'Shipping method status updated successfully',
-                    'data' => ['is_active' => $newStatus]
-                ], 200);
-            } else {
-                $this->jsonResponse([
+            if (!$success) {
+                return $res->json([
                     'success' => false,
-                    'message' => 'Failed to update shipping method status'
+                    'message' => 'Failed to update shipping method status',
                 ], 500);
             }
 
-        } catch (\Exception $e) {
-            $this->jsonResponse([
+            $this->logActivity($req, 'update', 'shipping_method', $id, [
+                'is_active' => $newStatus,
+                'action' => 'toggle_status',
+            ]);
+
+            return $res->json([
+                'success' => true,
+                'message' => 'Shipping method status updated successfully',
+                'data' => ['is_active' => $newStatus],
+            ], 200);
+        } catch (\Throwable $e) {
+            return $res->json([
                 'success' => false,
-                'message' => 'Failed to update shipping method status: ' . $e->getMessage()
+                'message' => 'Failed to update shipping method status: ' . $e->getMessage(),
             ], 500);
         }
     }
 
-    /**
-     * Validate shipping method data
-     */
-    private function validateShippingMethod($data, $excludeId = null)
+    private function validateShippingMethod(array $data, $excludeId = null): array
     {
-        if (!isset($data['name']) || empty(trim($data['name']))) {
+        if (!isset($data['name']) || empty(trim((string) $data['name']))) {
             return ['valid' => false, 'message' => 'Name is required'];
         }
 
@@ -394,7 +271,7 @@ class ShippingController extends Controller
             return ['valid' => false, 'message' => 'Fee must be a valid number'];
         }
 
-        if ($data['fee'] < 0) {
+        if ((float) $data['fee'] < 0) {
             return ['valid' => false, 'message' => 'Invalid fee - fee cannot be negative'];
         }
 
@@ -402,39 +279,41 @@ class ShippingController extends Controller
             return ['valid' => false, 'message' => 'Estimated days must be a valid number'];
         }
 
-        if ($data['estimated_days'] < 1) {
+        if ((int) $data['estimated_days'] < 1) {
             return ['valid' => false, 'message' => 'Estimated days must be at least 1'];
         }
 
         return ['valid' => true];
     }
 
-    /**
-     * Lấy Bearer token từ header
-     */
-    private function getBearerToken()
+    private function resolveActorUserId(Request $req): ?int
     {
-        $headers = getallheaders();
-        $authHeader = $headers['Authorization'] ?? $headers['authorization'] ?? '';
-        
-        if (preg_match('/Bearer\s(\S+)/', $authHeader, $matches)) {
-            return $matches[1];
+        $user = $req->getAttribute('user');
+        if (is_array($user) && !empty($user['user_id'])) {
+            return (int) $user['user_id'];
         }
-        
+
+        $payload = $req->getAttribute('token_payload');
+        if (is_array($payload) && !empty($payload['user_id'])) {
+            return (int) $payload['user_id'];
+        }
+
         return null;
     }
 
-    /**
-     * Log activity
-     */
-    private function logActivity($userId, $action, $entityType, $entityId, $data = null)
+    private function logActivity(Request $req, string $action, string $entityType, int $entityId, $data = null): void
     {
-        try {
-            $activityLog = new ActivityLog();
-            $activityLog->log($userId, $action, $entityType, $entityId, $data);
-        } catch (\Exception $e) {
-            // Log error but don't fail the main operation
-            error_log('Failed to log activity: ' . $e->getMessage());
+        // ActivityLog model is not available in this project — skip silently.
+        $userId = $this->resolveActorUserId($req);
+        if ($userId === null) {
+            return;
         }
+        error_log(sprintf(
+            '[ShippingController] activity user=%d action=%s entity=%s:%d',
+            $userId,
+            $action,
+            $entityType,
+            $entityId
+        ));
     }
 }

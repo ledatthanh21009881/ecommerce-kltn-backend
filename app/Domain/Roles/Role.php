@@ -4,6 +4,7 @@ declare(strict_types=1);
 namespace App\Domain\Roles;
 
 use App\Core\Model;
+use App\Support\PanelRole;
 use PDO;
 use Exception;
 
@@ -135,6 +136,66 @@ class Role extends Model
         $stmt = $this->getConnection()->prepare($sql);
         $stmt->execute();
         return $stmt->fetchAll(PDO::FETCH_ASSOC);
+    }
+
+    /**
+     * Roles panel (không gồm customer/shipper) có phân trang.
+     */
+    public function getPanelRolesWithPagination(?string $search, int $limit, int $offset): array
+    {
+        $externalPh = PanelRole::externalPlaceholders();
+        $where = "WHERE LOWER(r.role_name) NOT IN ({$externalPh})";
+        $params = PanelRole::EXTERNAL;
+
+        if ($search !== null && $search !== '') {
+            $where .= ' AND r.role_name LIKE ?';
+            $params[] = '%' . $search . '%';
+        }
+
+        $sql = "
+            SELECT r.role_id, r.role_name, COUNT(ur.user_id) AS user_count
+            FROM {$this->table} r
+            LEFT JOIN user_roles ur ON r.role_id = ur.role_id
+            {$where}
+            GROUP BY r.role_id, r.role_name
+            ORDER BY r.role_name ASC
+            LIMIT ? OFFSET ?
+        ";
+        $params[] = $limit;
+        $params[] = $offset;
+
+        $stmt = $this->getConnection()->prepare($sql);
+        $stmt->execute($params);
+        return $stmt->fetchAll(PDO::FETCH_ASSOC);
+    }
+
+    public function getPanelRoleCount(?string $search): int
+    {
+        $externalPh = PanelRole::externalPlaceholders();
+        $where = "WHERE LOWER(role_name) NOT IN ({$externalPh})";
+        $params = PanelRole::EXTERNAL;
+
+        if ($search !== null && $search !== '') {
+            $where .= ' AND role_name LIKE ?';
+            $params[] = '%' . $search . '%';
+        }
+
+        $sql = "SELECT COUNT(*) AS count FROM {$this->table} {$where}";
+        $stmt = $this->getConnection()->prepare($sql);
+        $stmt->execute($params);
+        $result = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        return (int) ($result['count'] ?? 0);
+    }
+
+    public function findById(int $roleId): ?array
+    {
+        $sql = "SELECT role_id, role_name FROM {$this->table} WHERE role_id = ?";
+        $stmt = $this->getConnection()->prepare($sql);
+        $stmt->execute([$roleId]);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        return $row ?: null;
     }
 
     /**

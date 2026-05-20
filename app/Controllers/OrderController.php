@@ -17,6 +17,9 @@ use PDO;
 
 class OrderController extends Controller 
 {
+    private const COUNTER_WALKIN_ACCOUNT = '__counter_walkin__';
+    private const COUNTER_WALKIN_EMAIL = 'counter.walkin@internal.local';
+
     private Order $orderModel;
     private OrderItem $orderItemModel;
     private Payment $paymentModel;
@@ -122,6 +125,27 @@ class OrderController extends Controller
     {
         try {
             $data = $req->json(); // Use json() instead of body() for JSON requests
+
+            $isCounterOrder = !empty($data['counter_order']);
+            if ($isCounterOrder && !$this->canCreateCounterOrder($req)) {
+                return $res->json(ResponseHelper::validationError([
+                    'counter_order' => 'Chỉ nhân viên cửa hàng mới được tạo đơn tại quầy không chọn khách.',
+                ]), 403);
+            }
+
+            if ($isCounterOrder) {
+                $customerId = isset($data['customer_id']) ? (int) $data['customer_id'] : 0;
+                $addressIdHint = isset($data['address_id']) ? (int) $data['address_id'] : 0;
+                if ($customerId <= 0 || $addressIdHint <= 0) {
+                    $defaults = $this->resolveCounterOrderDefaults();
+                    if ($customerId <= 0) {
+                        $data['customer_id'] = $defaults['customer_id'];
+                    }
+                    if ($addressIdHint <= 0) {
+                        $data['address_id'] = $defaults['address_id'];
+                    }
+                }
+            }
             
             // Validate required fields
             $validator = Validator::make($data, [
@@ -406,6 +430,8 @@ class OrderController extends Controller
                     // Add payment_id to order response
                     $order['payment_id'] = $paymentData['payment_id'] ?? null;
                     $order['payment_url'] = $paymentData['payment_url'] ?? null;
+                    $order['payment_qr_code'] = $paymentData['qr_code'] ?? null;
+                    $order['payment_method'] = $paymentData['method'] ?? $paymentMethod;
                 } catch (Exception $e) {
                     error_log("Error creating payment: " . $e->getMessage());
                     error_log("Error stack trace: " . $e->getTraceAsString());
@@ -1442,6 +1468,7 @@ class OrderController extends Controller
                 return new VietQRPaymentService($db, $paymentModel);
             case 'cod':
                 return new CODPaymentService($db, $paymentModel);
+            case 'bank_transfer':
             case 'payos':
                 $payosConfig = $this->config['payos'] ?? [];
                 // Fallback to $_ENV if config was loaded before .env (e.g. PAYOS_CLIENT_ID)
@@ -1456,5 +1483,188 @@ class OrderController extends Controller
             default:
                 throw new Exception("Unknown payment method: {$method}");
         }
+    }
+
+    /**
+     * Counter / walk-in orders from admin panel (customer & address optional).
+     */
+    private function canCreateCounterOrder(Request $req): bool
+    {
+        $user = $req->getAttribute('user');
+        if (!is_array($user)) {
+            return false;
+        }
+
+        if (!empty($user['is_admin'])) {
+            return true;
+        }
+
+        if (($user['account_type'] ?? '') === 'admin') {
+            return true;
+        }
+
+        $roles = array_map('strtolower', $user['roles'] ?? []);
+        if (in_array('admin', $roles, true)) {
+            return true;
+        }
+
+        // Staff accounts (any role other than customer-only)
+        if (empty($roles)) {
+            return false;
+        }
+
+        return count($roles) > 1 || !in_array('customer', $roles, true);
+    }
+
+    /**
+     * Default user + store pickup address for walk-in counter sales.
+     *
+     * @return array{customer_id: int, address_id: int}
+     */
+    private function resolveCounterOrderDefaults(): array
+    {
+        $pdo = $this->container->database()->getConnection();
+
+        $envUserId = (int) ($_ENV['COUNTER_ORDER_USER_ID'] ?? 0);
+        $envAddressId = (int) ($_ENV['COUNTER_ORDER_ADDRESS_ID'] ?? 0);
+        if ($envUserId > 0 && $envAddressId > 0) {
+            $this->ensureCustomerRow($pdo, $envUserId);
+            return ['customer_id' => $envUserId, 'address_id' => $envAddressId];
+        }
+
+        $stmt = $pdo->prepare("
+            SELECT u.user_id
+            FROM users u
+            INNER JOIN accounts a ON a.account_id = u.account_id
+            WHERE a.account_name = ?
+            LIMIT 1
+        ");
+        $stmt->execute([self::COUNTER_WALKIN_ACCOUNT]);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        $userId = $row ? (int) $row['user_id'] : 0;
+
+        if ($userId <= 0) {
+            $userId = $this->createCounterWalkInUser($pdo);
+        }
+
+        $addrStmt = $pdo->prepare("
+            SELECT address_id FROM addresses
+            WHERE user_id = ? AND is_default = 1
+            ORDER BY address_id DESC
+            LIMIT 1
+        ");
+        $addrStmt->execute([$userId]);
+        $addrRow = $addrStmt->fetch(PDO::FETCH_ASSOC);
+        $addressId = $addrRow ? (int) $addrRow['address_id'] : 0;
+
+        if ($addressId <= 0) {
+            $addressId = $this->createCounterStoreAddress($pdo, $userId);
+        }
+
+        $this->ensureCustomerRow($pdo, $userId);
+
+        return ['customer_id' => $userId, 'address_id' => $addressId];
+    }
+
+    /**
+     * orders.customer_id FK references customers.user_id — ensure row exists.
+     */
+    private function ensureCustomerRow(PDO $pdo, int $userId): void
+    {
+        if ($userId <= 0) {
+            return;
+        }
+
+        $exists = $pdo->prepare('SELECT user_id FROM customers WHERE user_id = ? LIMIT 1');
+        $exists->execute([$userId]);
+        if ($exists->fetchColumn()) {
+            return;
+        }
+
+        $u = $pdo->prepare('SELECT user_id FROM users WHERE user_id = ? LIMIT 1');
+        $u->execute([$userId]);
+        if (!$u->fetchColumn()) {
+            throw new \InvalidArgumentException('User not found for customer enrollment');
+        }
+
+        try {
+            $ins = $pdo->prepare(
+                'INSERT INTO customers (user_id, loyalty_points, total_orders, created_at, updated_at) VALUES (?, 0, 0, NOW(), NOW())'
+            );
+            $ins->execute([$userId]);
+        } catch (\PDOException $e) {
+            if (!isset($e->errorInfo[1]) || (int) $e->errorInfo[1] !== 1062) {
+                throw $e;
+            }
+        }
+    }
+
+    private function createCounterWalkInUser(PDO $pdo): int
+    {
+        $pdo->beginTransaction();
+        try {
+            $stmt = $pdo->prepare("
+                INSERT INTO accounts (account_name, password, account_type, is_active, created_at)
+                VALUES (?, ?, 'local', 1, NOW())
+            ");
+            $stmt->execute([
+                self::COUNTER_WALKIN_ACCOUNT,
+                password_hash(bin2hex(random_bytes(16)), PASSWORD_DEFAULT),
+            ]);
+            $accountId = (int) $pdo->lastInsertId();
+
+            $stmt = $pdo->prepare("
+                INSERT INTO users (account_id, first_name, last_name, email, phone)
+                VALUES (?, ?, ?, ?, ?)
+            ");
+            $stmt->execute([
+                $accountId,
+                'Khách',
+                'vãng lai',
+                self::COUNTER_WALKIN_EMAIL,
+                '0000000000',
+            ]);
+            $userId = (int) $pdo->lastInsertId();
+
+            $roleStmt = $pdo->query("SELECT role_id FROM roles WHERE role_name = 'customer' LIMIT 1");
+            $roleRow = $roleStmt ? $roleStmt->fetch(PDO::FETCH_ASSOC) : false;
+            if ($roleRow && !empty($roleRow['role_id'])) {
+                $link = $pdo->prepare('INSERT INTO user_roles (user_id, role_id) VALUES (?, ?)');
+                $link->execute([$userId, (int) $roleRow['role_id']]);
+            }
+
+            $this->ensureCustomerRow($pdo, $userId);
+
+            $pdo->commit();
+            return $userId;
+        } catch (\Throwable $e) {
+            $pdo->rollBack();
+            throw $e;
+        }
+    }
+
+    private function createCounterStoreAddress(PDO $pdo, int $userId): int
+    {
+        $lat = (float) ($_ENV['COUNTER_STORE_LAT'] ?? 10.776889);
+        $lng = (float) ($_ENV['COUNTER_STORE_LNG'] ?? 106.700806);
+
+        $stmt = $pdo->prepare("
+            INSERT INTO addresses (
+                user_id, receiver_name, phone, address_line, ward, district, province, is_default, lat, lng
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+        ");
+        $stmt->execute([
+            $userId,
+            'Khách vãng lai',
+            '0000000000',
+            'Nhận tại cửa hàng',
+            '',
+            '',
+            'Cửa hàng',
+            $lat,
+            $lng,
+        ]);
+
+        return (int) $pdo->lastInsertId();
     }
 }

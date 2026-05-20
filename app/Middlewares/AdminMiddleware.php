@@ -10,39 +10,37 @@ use Exception;
 class AdminMiddleware
 {
     private JWT $jwt;
-    
+
     public function __construct(Container $container)
     {
         $this->jwt = $container->jwt();
     }
-    
+
     public function handle(Request $request, Response $response, callable $next)
     {
         try {
-            // First check if user is authenticated
             $token = $request->bearer();
             if (!$token) {
                 return $response->json(ResponseHelper::unauthorized('Authorization token required'));
             }
-            
-            // Decode and verify JWT token
+
             $payload = $this->jwt->decode($token);
             if (!$payload) {
                 return $response->json(ResponseHelper::unauthorized('Invalid or expired token'));
             }
-            
-            // Check if user has admin role
+
             $roles = $payload['roles'] ?? [];
-            if (!in_array('admin', $roles)) {
+            $isAdmin = !empty($payload['is_admin']) || in_array('admin', $roles, true);
+            $allowedPaths = $payload['allowed_menu_paths'] ?? [];
+
+            if (!$isAdmin && (!is_array($allowedPaths) || count($allowedPaths) === 0)) {
                 return $response->json(ResponseHelper::forbidden('Admin access required'));
             }
-            
-            // Add user info to request for use in controllers
+
             $request->setAttribute('user', $payload);
-            
-            // Continue to the next middleware or controller
+            $request->setAttribute('token_payload', $payload);
+
             return $next($request, $response);
-            
         } catch (Exception $e) {
             return $response->json(ResponseHelper::unauthorized('Authentication failed: ' . $e->getMessage()));
         }

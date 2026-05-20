@@ -363,12 +363,15 @@ class PaymentController extends Controller
                 }
             }
 
+            $payment = $this->enrichPayOsPaymentForResponse($payment);
+
             return $res->json(ResponseHelper::success([
                 'payment_id' => $payment['payment_id'],
                 'order_id' => $payment['order_id'],
                 'method' => $payment['method'],
                 'status' => $payment['status'],
                 'payment_url' => $payment['payment_url'] ?? null,
+                'qr_code' => $payment['qr_code'] ?? null,
                 'expires_at' => $payment['expires_at'] ?? null,
                 'transaction_id' => $payment['transaction_id'] ?? null,
                 'bank_account' => $bankAccount,
@@ -398,6 +401,8 @@ class PaymentController extends Controller
             if (!$payment) {
                 return $res->json(ResponseHelper::notFound('Payment not found'));
             }
+
+            $payment = $this->enrichPayOsPaymentForResponse($payment);
 
             return $res->json(ResponseHelper::success($payment));
 
@@ -731,6 +736,68 @@ class PaymentController extends Controller
         } catch (Exception $e) {
             error_log('[PaymentController] Auto-assign after payment confirmed failed: ' . $e->getMessage());
         }
+    }
+
+    private function createPayOsService(): PayOSPaymentService
+    {
+        $db = $this->container->database()->getConnection();
+        $payosConfig = $this->config['payos'] ?? [];
+        if (empty($payosConfig['client_id']) && !empty($_ENV['PAYOS_CLIENT_ID'])) {
+            $payosConfig['client_id'] = $_ENV['PAYOS_CLIENT_ID'];
+            $payosConfig['api_key'] = $payosConfig['api_key'] ?? $_ENV['PAYOS_API_KEY'] ?? '';
+            $payosConfig['checksum_key'] = $payosConfig['checksum_key'] ?? $_ENV['PAYOS_CHECKSUM_KEY'] ?? '';
+            $payosConfig['api_url'] = $payosConfig['api_url'] ?? $_ENV['PAYOS_API_URL'] ?? 'https://api-merchant.payos.vn';
+            $payosConfig['base_url'] = $payosConfig['base_url'] ?? $_ENV['PAYOS_BASE_URL'] ?? $_ENV['APP_URL'] ?? 'http://localhost:3000';
+        }
+
+        return new PayOSPaymentService($db, $this->paymentModel, $payosConfig);
+    }
+
+    /**
+     * Ensure PayOS VietQR string is available when reopening admin QR dialog.
+     */
+    private function enrichPayOsPaymentForResponse(array $payment): array
+    {
+        $method = strtolower((string) ($payment['method'] ?? ''));
+        if ($method !== 'payos' && $method !== 'bank_transfer') {
+            return $payment;
+        }
+
+        $qr = $this->paymentModel->extractQrCode($payment);
+        if ($qr) {
+            $payment['qr_code'] = $qr;
+            return $payment;
+        }
+
+        if (strtolower((string) ($payment['status'] ?? '')) !== 'pending') {
+            return $payment;
+        }
+
+        try {
+            $service = $this->createPayOsService();
+            $fresh = $service->fetchPaymentByOrderCode((int) ($payment['order_id'] ?? 0));
+            if ($fresh) {
+                if (!empty($fresh['qr_code'])) {
+                    $payment['qr_code'] = $fresh['qr_code'];
+                }
+                if (!empty($fresh['payment_url'])) {
+                    $payment['payment_url'] = $fresh['payment_url'];
+                }
+                try {
+                    $this->paymentModel->updatePayOsDisplayData(
+                        (int) $payment['payment_id'],
+                        $fresh['payment_url'] ?? null,
+                        $fresh['qr_code'] ?? null
+                    );
+                } catch (\PDOException $e) {
+                    error_log('[Payment] Could not persist qr_code (run migration 2026_payments_qr_code.sql): ' . $e->getMessage());
+                }
+            }
+        } catch (\Throwable $e) {
+            error_log('[Payment] PayOS refresh QR failed: ' . $e->getMessage());
+        }
+
+        return $payment;
     }
 }
 

@@ -113,6 +113,41 @@ class Payment extends Model
         return $stmt->execute([$paymentUrl, $paymentId]);
     }
 
+    public function updatePayOsDisplayData(int $paymentId, ?string $paymentUrl, ?string $qrCode): bool
+    {
+        $sql = "
+            UPDATE {$this->table}
+            SET payment_url = COALESCE(?, payment_url),
+                qr_code = COALESCE(?, qr_code),
+                updated_at = NOW()
+            WHERE payment_id = ?
+        ";
+
+        $stmt = $this->getConnection()->prepare($sql);
+        return $stmt->execute([$paymentUrl, $qrCode, $paymentId]);
+    }
+
+    /**
+     * Resolve stored PayOS QR string from row (column or legacy callback_payload).
+     */
+    public function extractQrCode(array $payment): ?string
+    {
+        if (!empty($payment['qr_code']) && is_string($payment['qr_code'])) {
+            return $payment['qr_code'];
+        }
+
+        if (empty($payment['callback_payload'])) {
+            return null;
+        }
+
+        $decoded = json_decode((string) $payment['callback_payload'], true);
+        if (!is_array($decoded)) {
+            return null;
+        }
+
+        return $decoded['qrCode'] ?? $decoded['qr_code'] ?? $decoded['payos_qr_code'] ?? null;
+    }
+
     public function updateExpiresAt(int $paymentId, ?string $expiresAt): bool
     {
         $sql = "

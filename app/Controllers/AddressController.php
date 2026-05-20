@@ -63,7 +63,7 @@ class AddressController extends Controller
         $ward = trim($data['ward']);
         $district = trim($data['district']);
         $province = trim($data['province']);
-        $coordinates = GeocodingService::resolveFromParts($addressLine, $ward, $district, $province);
+        $coordinates = self::resolveCoordinates($data, $addressLine, $ward, $district, $province);
         if (!$coordinates) {
             return $res->json(ResponseHelper::validationError([
                 'address_line' => 'Không thể xác định tọa độ cho địa chỉ này. Vui lòng kiểm tra lại thông tin địa chỉ.',
@@ -127,7 +127,7 @@ class AddressController extends Controller
         $ward = trim($data['ward']);
         $district = trim($data['district']);
         $province = trim($data['province']);
-        $coordinates = GeocodingService::resolveFromParts($addressLine, $ward, $district, $province);
+        $coordinates = self::resolveCoordinates($data, $addressLine, $ward, $district, $province);
         if (!$coordinates) {
             return $res->json(ResponseHelper::validationError([
                 'address_line' => 'Không thể xác định tọa độ cho địa chỉ này. Vui lòng kiểm tra lại thông tin địa chỉ.',
@@ -196,5 +196,29 @@ class AddressController extends Controller
         $pdo->prepare("UPDATE addresses SET is_default = 0 WHERE user_id = ?")->execute([$userId]);
         $pdo->prepare("UPDATE addresses SET is_default = 1 WHERE address_id = ? AND user_id = ?")->execute([$id, $userId]);
         return $res->json(ResponseHelper::success(null, 'Default address updated'));
+    }
+
+    /**
+     * Prefer client lat/lng from Mapbox; fallback to server geocoding.
+     *
+     * @param array<string, mixed> $data
+     * @return array{lat: float, lng: float}|null
+     */
+    private static function resolveCoordinates(
+        array $data,
+        string $addressLine,
+        string $ward,
+        string $district,
+        string $province
+    ): ?array {
+        if (isset($data['lat'], $data['lng']) && $data['lat'] !== '' && $data['lng'] !== '') {
+            $lat = (float) $data['lat'];
+            $lng = (float) $data['lng'];
+            if ($lat >= -90 && $lat <= 90 && $lng >= -180 && $lng <= 180 && ($lat !== 0.0 || $lng !== 0.0)) {
+                return ['lat' => $lat, 'lng' => $lng];
+            }
+        }
+
+        return GeocodingService::resolveFromParts($addressLine, $ward, $district, $province);
     }
 }

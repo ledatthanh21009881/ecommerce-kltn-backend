@@ -284,7 +284,7 @@ class Shipper extends Model
                 'on_time_delivery_pct' => 0.00,
                 'total_delivered' => 0,
                 'note' => $data['note'] ?? null,
-                'is_available' => 1,
+                'is_available' => 0,
                 'status' => 'active'
             ];
             
