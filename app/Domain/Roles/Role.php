@@ -14,7 +14,8 @@ class Role extends Model
     protected string $primaryKey = 'role_id';
     
     protected array $fillable = [
-        'role_name'
+        'role_name',
+        'display_name',
     ];
 
     /**
@@ -132,7 +133,7 @@ class Role extends Model
      */
     public function getAll(): array
     {
-        $sql = "SELECT role_id, role_name FROM {$this->table} ORDER BY role_name";
+        $sql = "SELECT role_id, role_name, display_name FROM {$this->table} ORDER BY role_name";
         $stmt = $this->getConnection()->prepare($sql);
         $stmt->execute();
         return $stmt->fetchAll(PDO::FETCH_ASSOC);
@@ -153,11 +154,11 @@ class Role extends Model
         }
 
         $sql = "
-            SELECT r.role_id, r.role_name, COUNT(ur.user_id) AS user_count
+            SELECT r.role_id, r.role_name, r.display_name, COUNT(ur.user_id) AS user_count
             FROM {$this->table} r
             LEFT JOIN user_roles ur ON r.role_id = ur.role_id
             {$where}
-            GROUP BY r.role_id, r.role_name
+            GROUP BY r.role_id
             ORDER BY r.role_name ASC
             LIMIT ? OFFSET ?
         ";
@@ -190,7 +191,7 @@ class Role extends Model
 
     public function findById(int $roleId): ?array
     {
-        $sql = "SELECT role_id, role_name FROM {$this->table} WHERE role_id = ?";
+        $sql = "SELECT role_id, role_name, display_name FROM {$this->table} WHERE role_id = ?";
         $stmt = $this->getConnection()->prepare($sql);
         $stmt->execute([$roleId]);
         $row = $stmt->fetch(PDO::FETCH_ASSOC);

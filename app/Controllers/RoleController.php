@@ -96,7 +96,7 @@ class RoleController extends Controller
             $data = $this->request->json();
 
             // Validation
-            $errors = $this->validateRoleData($data);
+            $errors = $this->validateRoleData($data, false);
             if (!empty($errors)) {
                 $this->jsonResponse([
                     'success' => false,
@@ -130,7 +130,7 @@ class RoleController extends Controller
             $data = $this->request->json();
 
             // Validation
-            $errors = $this->validateRoleData($data);
+            $errors = $this->validateRoleData($data, false);
             if (!empty($errors)) {
                 $this->jsonResponse([
                     'success' => false,
@@ -244,7 +244,7 @@ class RoleController extends Controller
     {
         try {
             $data = $req->json();
-            $errors = $this->validateRoleData($data);
+            $errors = $this->validateRoleData($data, true);
             if ($errors !== []) {
                 return $res->json(ResponseHelper::error('Validation failed', 400, $errors));
             }
@@ -254,7 +254,11 @@ class RoleController extends Controller
                 return $res->json(ResponseHelper::error('Cannot create external roles from admin panel', 400));
             }
 
-            $roleId = $this->roleModel->create(['role_name' => $roleName]);
+            $displayName = $this->normalizeDisplayName((string) ($data['display_name'] ?? ''));
+            $roleId = $this->roleModel->create([
+                'role_name' => $roleName,
+                'display_name' => $displayName,
+            ]);
 
             return $res->json(ResponseHelper::success(['role_id' => $roleId], 'Role created successfully'), 201);
         } catch (Exception $e) {
@@ -278,7 +282,7 @@ class RoleController extends Controller
             }
 
             $data = $req->json();
-            $errors = $this->validateRoleData($data);
+            $errors = $this->validateRoleData($data, true);
             if ($errors !== []) {
                 return $res->json(ResponseHelper::error('Validation failed', 400, $errors));
             }
@@ -291,7 +295,11 @@ class RoleController extends Controller
                 return $res->json(ResponseHelper::error('Invalid role name for panel'), 400);
             }
 
-            $this->roleModel->update($roleId, ['role_name' => $roleName]);
+            $displayName = $this->normalizeDisplayName((string) ($data['display_name'] ?? ''));
+            $this->roleModel->update($roleId, [
+                'role_name' => $roleName,
+                'display_name' => $displayName,
+            ]);
 
             return $res->json(ResponseHelper::success(null, 'Role updated successfully'));
         } catch (Exception $e) {
@@ -339,6 +347,11 @@ class RoleController extends Controller
         $name = preg_replace('/\s+/', '_', $name) ?? $name;
 
         return $name;
+    }
+
+    private function normalizeDisplayName(string $name): string
+    {
+        return trim($name);
     }
 
     /**
@@ -467,14 +480,29 @@ class RoleController extends Controller
     }
 
     // Helper methods
-    private function validateRoleData(array $data): array
+    /**
+     * @param bool $forPanel Admin panel API requires display_name; legacy /api/v1 may omit it.
+     */
+    private function validateRoleData(array $data, bool $forPanel = false): array
     {
         $errors = [];
 
-        if (empty($data['role_name'])) {
+        $roleName = isset($data['role_name']) ? trim((string) $data['role_name']) : '';
+        if ($roleName === '') {
             $errors['role_name'] = 'Role name is required';
-        } elseif (strlen($data['role_name']) > 50) {
+        } elseif (strlen($roleName) > 50) {
             $errors['role_name'] = 'Role name must be less than 50 characters';
+        }
+
+        $displayRaw = isset($data['display_name']) ? trim((string) $data['display_name']) : '';
+        if ($forPanel) {
+            if ($displayRaw === '') {
+                $errors['display_name'] = 'Display name is required';
+            } elseif (mb_strlen($displayRaw) > 255) {
+                $errors['display_name'] = 'Display name must be at most 255 characters';
+            }
+        } elseif ($displayRaw !== '' && mb_strlen($displayRaw) > 255) {
+            $errors['display_name'] = 'Display name must be at most 255 characters';
         }
 
         return $errors;

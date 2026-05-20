@@ -111,19 +111,24 @@ class InventoryController extends Controller
             // Debug logging
             error_log("Inventory store input: " . json_encode($input));
 
-            // Validate input
-            if (!$input['product_id'] || !$input['size_id'] || !$input['sku'] || !isset($input['stock_quantity']) || !$input['status']) {
+            // Validate input (stock_quantity always 0 on create — increases via purchase receipts only)
+            if (!$input['product_id'] || !$input['size_id'] || !$input['sku'] || !$input['status']) {
                 error_log("Missing required fields: " . json_encode($input));
                 return $res->json(['success' => false, 'message' => 'Missing required fields', 'status_code' => 400], 400);
             }
             
-            if (!is_numeric($input['product_id']) || !is_numeric($input['size_id']) || !is_numeric($input['stock_quantity'])) {
+            if (!is_numeric($input['product_id']) || !is_numeric($input['size_id'])) {
                 return $res->json(['success' => false, 'message' => 'Invalid numeric fields', 'status_code' => 400], 400);
             }
-            
-            if ($input['stock_quantity'] < 0) {
-                return $res->json(['success' => false, 'message' => 'Stock quantity cannot be negative', 'status_code' => 400], 400);
+
+            if (isset($input['stock_quantity']) && (int) $input['stock_quantity'] !== 0) {
+                return $res->json([
+                    'success' => false,
+                    'message' => 'Stock can only be increased via supplier purchase receipts',
+                    'status_code' => 400,
+                ], 400);
             }
+            $input['stock_quantity'] = 0;
             
             if (!in_array($input['status'], ['in_stock', 'out_of_stock'])) {
                 return $res->json(['success' => false, 'message' => 'Invalid status', 'status_code' => 400], 400);
