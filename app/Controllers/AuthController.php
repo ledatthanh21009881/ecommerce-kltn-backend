@@ -6,7 +6,7 @@ namespace App\Controllers;
 use App\Core\{Controller, Request, Response};
 use App\Domain\Auth\{Account, User, RefreshToken};
 use App\Core\{Validator, Container};
-use App\Support\{ResponseHelper, JWT, PanelRole};
+use App\Support\{ResponseHelper, JWT, PanelRole, CloudinaryService};
 use App\Services\MenuPermissionService;
 use Exception;
 use PDO;
@@ -574,6 +574,63 @@ class AuthController extends Controller
             
         } catch (Exception $e) {
             return $res->json(ResponseHelper::serverError('Update failed: ' . $e->getMessage()));
+        }
+    }
+
+    /**
+     * POST /api/v1/auth/avatar — upload ảnh đại diện (Cloudinary), lưu users.avatar_url.
+     * Body: { avatar_base64: "data:image/...;base64,..." }
+     */
+    public function uploadAvatar(Request $req, Response $res)
+    {
+        $user = $req->getAttribute('user');
+        if (!$user) {
+            return $res->json(ResponseHelper::unauthorized());
+        }
+
+        $input = $req->json();
+        $base64 = isset($input['avatar_base64']) ? trim((string) $input['avatar_base64']) : '';
+
+        if ($base64 === '') {
+            return $res->json(ResponseHelper::error('avatar_base64 is required', 400), 400);
+        }
+
+        if (!preg_match('/^data:image\/(png|jpeg|jpg|webp|gif);base64,/', $base64)) {
+            return $res->json(ResponseHelper::error('Unsupported image format. Use PNG, JPEG, WebP or GIF.', 422), 422);
+        }
+
+        $commaPos = strpos($base64, ',');
+        $base64Payload = $commaPos !== false ? substr($base64, $commaPos + 1) : $base64;
+        $approxBytes = (int) (strlen($base64Payload) * 3 / 4);
+        $maxAvatarBytes = 10 * 1024 * 1024;
+        if ($approxBytes > $maxAvatarBytes) {
+            return $res->json(ResponseHelper::error('Image must be 10 MB or smaller', 422), 422);
+        }
+
+        $userId = (int) ($user['user_id'] ?? 0);
+        if ($userId <= 0) {
+            return $res->json(ResponseHelper::unauthorized('User not found'));
+        }
+
+        try {
+            $cloudinary = new CloudinaryService();
+            $folder = 'avatars/' . $userId;
+            $upload = $cloudinary->uploadBase64Image($base64, $folder, 'image');
+
+            if (!($upload['success'] ?? false) || empty($upload['url'])) {
+                $err = isset($upload['error']) ? (string) $upload['error'] : 'Upload failed';
+                return $res->json(ResponseHelper::error('Avatar upload failed: ' . $err, 422), 422);
+            }
+
+            $avatarUrl = (string) $upload['url'];
+            $this->userModel->update($userId, ['avatar_url' => $avatarUrl]);
+
+            return $res->json(ResponseHelper::success([
+                'avatar_url' => $avatarUrl,
+                'public_id' => $upload['public_id'] ?? null,
+            ], 'Avatar uploaded successfully'));
+        } catch (Exception $e) {
+            return $res->json(ResponseHelper::serverError('Avatar upload failed: ' . $e->getMessage()));
         }
     }
     
