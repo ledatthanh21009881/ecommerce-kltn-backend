@@ -32,7 +32,6 @@ class WebSocketService implements MessageComponentInterface
     {
         $this->clients->attach($conn);
         error_log("New connection! ({$conn->resourceId})");
-        $this->drainAdminNotificationQueue();
     }
 
     public function onMessage(ConnectionInterface $from, $msg)
@@ -119,7 +118,6 @@ class WebSocketService implements MessageComponentInterface
                 $this->leaveAdminNotifications($from);
                 break;
         }
-        $this->drainAdminNotificationQueue();
     }
 
     public function onClose(ConnectionInterface $conn)
@@ -358,7 +356,6 @@ class WebSocketService implements MessageComponentInterface
         }
         error_log("Broadcasted new_message to {$sentCount} clients in conversation {$conversationId}");
 
-        // Keep file queue for compatibility with the secondary Socket.IO server flow.
         $broadcastData = [
             'type' => 'backend_message',
             'conversation_id' => $conversationId,
@@ -366,15 +363,7 @@ class WebSocketService implements MessageComponentInterface
             'timestamp' => time()
         ];
 
-        $broadcastFile = __DIR__ . '/../../broadcast_queue.json';
-        $queue = [];
-
-        if (file_exists($broadcastFile)) {
-            $queue = json_decode(file_get_contents($broadcastFile), true) ?: [];
-        }
-
-        $queue[] = $broadcastData;
-        file_put_contents($broadcastFile, json_encode($queue));
+        $this->appendToQueueFile(__DIR__ . '/../../broadcast_queue.json', $broadcastData);
     }
 
     protected function broadcastTyping($from, $conversationId, $typingType)
@@ -497,14 +486,23 @@ class WebSocketService implements MessageComponentInterface
         
         error_log("Broadcasted payment update to {$sentCount} clients: payment_id={$paymentId}, order_id={$orderId}, status={$status}");
         
-        // Also write to file queue for Socket.IO server (if using)
-        $broadcastFile = __DIR__ . '/../../broadcast_queue.json';
-        $queue = [];
-        if (file_exists($broadcastFile)) {
-            $queue = json_decode(file_get_contents($broadcastFile), true) ?: [];
-        }
-        $queue[] = $updateData;
-        file_put_contents($broadcastFile, json_encode($queue));
+        $this->appendToQueueFile(__DIR__ . '/../../broadcast_queue.json', $updateData);
+    }
+
+    private function appendToQueueFile(string $path, array $item): void
+    {
+        $fp = fopen($path, 'c+');
+        if (!$fp) return;
+        flock($fp, LOCK_EX);
+        $raw = stream_get_contents($fp);
+        $queue = ($raw !== false && $raw !== '') ? (json_decode($raw, true) ?: []) : [];
+        $queue[] = $item;
+        ftruncate($fp, 0);
+        rewind($fp);
+        fwrite($fp, json_encode($queue));
+        fflush($fp);
+        flock($fp, LOCK_UN);
+        fclose($fp);
     }
 
     public function startServer($port = 8080)

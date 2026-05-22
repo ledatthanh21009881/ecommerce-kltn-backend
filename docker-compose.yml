@@ -25,6 +25,7 @@ services:
       dockerfile: Dockerfile
     container_name: php-shopswift
     restart: always
+    entrypoint: ["/bin/sh", "/var/www/docker/scripts/php-entrypoint.sh"]
     volumes:
       - .:/var/www
     working_dir: /var/www
@@ -45,8 +46,28 @@ services:
       MYSQL_USER: shopswift
       MYSQL_PASSWORD: vivieniedatn2026
     volumes:
-      - mysql_data:/var/lib/mysql
+      - ./docker/mysql/data:/var/lib/mysql
+      - ./docker/mysql/backups:/backups
     command: --default-authentication-plugin=mysql_native_password
+    networks:
+      - shopswift-network
+
+  websocket:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: websocket-shopswift
+    restart: always
+    entrypoint: ["/bin/sh", "/var/www/docker/scripts/websocket-entrypoint.sh"]
+    ports:
+      - "8080:8080"
+    volumes:
+      - .:/var/www
+    working_dir: /var/www
+    env_file:
+      - .env
+    depends_on:
+      - mysql
     networks:
       - shopswift-network
 

@@ -48,3 +48,6 @@ npm-debug.log*
 # Build files
 /build/
 /dist/
+
+# MySQL data
+docker/mysql/data/
