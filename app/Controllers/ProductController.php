@@ -210,7 +210,7 @@ class ProductController extends Controller
                     'list_price' => $data['list_price'], // Giá bán chính
                     'compare_at_price' => $data['compare_at_price'] ?? null, // Giá so sánh (gạch ngang)
                     'cost_price' => $data['cost_price'] ?? null, // Giá vốn
-                    'stock' => $data['stock'] ?? 0, // Tồn kho tổng
+                    'stock' => 0, // Tồn kho chỉ tăng qua phiếu nhập
                     'status' => $data['status'] ?? 'active',
                     'is_featured' => $data['is_featured'] ?? false
                 ];
@@ -232,7 +232,7 @@ class ProductController extends Controller
                             'product_id' => $productId,
                             'size_id' => $variant['size_id'],
                             'sku' => $variant['sku'] ?? null,
-                            'stock_quantity' => $variant['stock_quantity'] ?? 0,
+                            'stock_quantity' => 0,
                             'status' => $variant['status'] ?? 'in_stock',
                             'is_active' => $variant['is_active'] ?? true
                         ];
@@ -354,7 +354,7 @@ class ProductController extends Controller
                 $allowedFields = [
                     'product_name', 'category_id', 'short_description', 'description', 
                     'material', 'list_price', 'compare_at_price', 'cost_price', 
-                    'stock', 'status', 'is_featured'
+                    'status', 'is_featured'
                 ];
                 
                 foreach ($allowedFields as $field) {
@@ -376,6 +376,17 @@ class ProductController extends Controller
                 
                 // 2. Cập nhật variants (với cấu trúc database mới)
                 if (isset($data['variants']) && is_array($data['variants'])) {
+                    $variantStmt = $pdo->prepare(
+                        'SELECT size_id, sku, stock_quantity FROM product_variants WHERE product_id = ?'
+                    );
+                    $variantStmt->execute([(int)$id]);
+                    $existingVariants = $variantStmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+                    $stockBySizeSku = [];
+                    foreach ($existingVariants as $ev) {
+                        $key = (int)($ev['size_id'] ?? 0) . ':' . trim((string)($ev['sku'] ?? ''));
+                        $stockBySizeSku[$key] = (int)($ev['stock_quantity'] ?? 0);
+                    }
+
                     // Xóa variants cũ
                     $deleteVariantsResult = $this->productModel->deleteVariantsByProductId((int)$id);
                     if (!$deleteVariantsResult) {
@@ -387,12 +398,15 @@ class ProductController extends Controller
                         if (!isset($variant['size_id'])) {
                             throw new Exception("Variant at index {$index} missing size_id");
                         }
+
+                        $stockKey = (int)$variant['size_id'] . ':' . trim((string)($variant['sku'] ?? ''));
+                        $preservedStock = $stockBySizeSku[$stockKey] ?? 0;
                         
                         $variantData = [
                             'product_id' => $id,
                             'size_id' => $variant['size_id'],
                             'sku' => $variant['sku'] ?? null,
-                            'stock_quantity' => $variant['stock_quantity'] ?? 0,
+                            'stock_quantity' => $preservedStock,
                             'status' => $variant['status'] ?? 'in_stock',
                             'is_active' => $variant['is_active'] ?? true
                         ];
