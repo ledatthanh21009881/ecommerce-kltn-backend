@@ -12,6 +12,7 @@ use App\Support\ResponseHelper;
 use App\Core\Validator;
 use App\Services\AdminNotificationService;
 use App\Services\NotificationService;
+use App\Services\ShipperDeliveryPhotoService;
 use Exception;
 use PDO;
 
@@ -990,7 +991,10 @@ class OrderController extends Controller
 
             try {
                 $updatedOrder = $this->performShippingTransition($orderId, $shipperId, 'arrived', $payload, [
-                    'require_location' => true
+                    'require_photo' => true,
+                    'require_location' => true,
+                    'require_proof' => true,
+                    'proof_type' => 'arrival_photo',
                 ]);
                 return $res->json(ResponseHelper::success($updatedOrder, 'Arrival confirmed'));
             } catch (Exception $workflowException) {
@@ -1283,10 +1287,30 @@ class OrderController extends Controller
     ): array {
         $this->getShipperOrderContext($orderId, $shipperId);
 
-        $photoUrl = $payload['photo_url']
-            ?? $payload['confirmation_photo']
-            ?? $payload['photo']
-            ?? null;
+        $photoUrl = null;
+        $needsPhoto = ($options['require_photo'] ?? false) || ($options['require_proof'] ?? false);
+
+        if ($needsPhoto) {
+            $photoService = new ShipperDeliveryPhotoService();
+            $photoUrl = $photoService->resolveFromPayload($orderId, $payload);
+        } else {
+            $rawPhoto = $payload['photo_url']
+                ?? $payload['photoUrl']
+                ?? $payload['confirmation_photo']
+                ?? $payload['photo']
+                ?? null;
+            if (is_string($rawPhoto) && trim($rawPhoto) !== '') {
+                try {
+                    $photoService = new ShipperDeliveryPhotoService();
+                    $photoUrl = $photoService->resolveUrlString($orderId, trim($rawPhoto));
+                } catch (Exception $e) {
+                    if ((int) $e->getCode() === 422) {
+                        throw $e;
+                    }
+                    $photoUrl = trim($rawPhoto);
+                }
+            }
+        }
 
         if (($options['require_photo'] ?? false) && !$photoUrl) {
             throw new Exception('Photo proof is required for this action', 422);
