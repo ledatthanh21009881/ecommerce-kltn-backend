@@ -653,75 +653,25 @@ class PaymentController extends Controller
     private function autoAssignOrderAfterPaymentConfirmed(int $orderId): void
     {
         try {
-            $order = $this->orderModel->find($orderId);
-            if (!$order) {
-                return;
-            }
+            $shipperId = $this->orderModel->autoAssignBestAvailableShipper(
+                $orderId,
+                1,
+                'Order auto-assigned after payment confirmed'
+            );
 
-            if (!in_array($order['status'], ['pending', 'processing'], true)) {
+            if ($shipperId === null) {
+                error_log("[PaymentController] Auto-assign after payment: no shipper for order #{$orderId} (check is_available=1)");
                 return;
             }
 
             $pdo = $this->container->database()->getConnection();
 
-            $trackingStmt = $pdo->prepare("SELECT shipper_id FROM shipping_tracking WHERE order_id = ? LIMIT 1");
-            $trackingStmt->execute([$orderId]);
-            $existingAssignment = $trackingStmt->fetch(PDO::FETCH_ASSOC);
-            if ($existingAssignment && !empty($existingAssignment['shipper_id'])) {
-                return;
-            }
-
-            $shipperSql = "
-                SELECT
-                    s.user_id,
-                    COUNT(CASE WHEN o.status IN ('processing', 'shipping') THEN 1 END) AS active_orders
-                FROM shippers s
-                LEFT JOIN shipping_tracking st ON st.shipper_id = s.user_id
-                LEFT JOIN orders o ON o.order_id = st.order_id
-                WHERE s.is_available = 1 AND s.status = 'active'
-                GROUP BY s.user_id, s.rating, s.on_time_delivery_pct
-                ORDER BY active_orders ASC, s.rating DESC, s.on_time_delivery_pct DESC
-                LIMIT 1
-            ";
-            $shipperStmt = $pdo->query($shipperSql);
-            $shipper = $shipperStmt ? $shipperStmt->fetch(PDO::FETCH_ASSOC) : null;
-            if (!$shipper || empty($shipper['user_id'])) {
-                return;
-            }
-
-            $shipperId = (int)$shipper['user_id'];
-            $assignedBy = 1;
-
-            $assigned = $this->orderModel->assignShipper($orderId, $shipperId, $assignedBy);
-            if (!$assigned) {
-                return;
-            }
-
-            if ($order['status'] === 'pending') {
-                $this->orderModel->updateStatus($orderId, 'processing', $assignedBy, 'Order auto-assigned after payment confirmed');
-            }
-
             try {
-                $this->orderModel->forceShippingStatus(
-                    $orderId,
-                    'new_request',
-                    $shipperId,
-                    ['note' => 'Order auto-assigned after payment confirmed']
-                );
-            } catch (Exception $e) {
-                error_log('[PaymentController] Auto-assign force shipping status failed: ' . $e->getMessage());
-            }
-
-            try {
-                $notificationService = new NotificationService($pdo);
-                $notificationService->sendPushNotification(
+                (new NotificationService($pdo))->sendPushNotification(
                     $shipperId,
                     'Đơn hàng mới được gán',
                     "Bạn có đơn hàng #{$orderId} mới cần xử lý",
-                    [
-                        'order_id' => $orderId,
-                        'type' => 'new_order_assigned'
-                    ],
+                    ['order_id' => $orderId, 'type' => 'new_order_assigned'],
                     'new_order_assigned'
                 );
             } catch (Exception $e) {

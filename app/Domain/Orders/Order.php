@@ -490,6 +490,94 @@ class Order extends Model
         }
     }
 
+    /**
+     * Gỡ shipper khỏi đơn (sau từ chối) để auto-gán lại shipper khác.
+     */
+    public function clearShipperAssignment(int $orderId): void
+    {
+        $stmt = $this->getConnection()->prepare('DELETE FROM shipping_tracking WHERE order_id = ?');
+        $stmt->execute([$orderId]);
+    }
+
+    /**
+     * Tự gán shipper rảnh nhất (is_available + active). Giữ đơn ở pending/processing — không chuyển shipping.
+     * Trả về shipper_id khi gán thành công, null nếu bỏ qua hoặc thất bại.
+     */
+    public function autoAssignBestAvailableShipper(
+        int $orderId,
+        int $assignedBy,
+        string $note = 'Auto-assigned',
+        ?int $excludeShipperId = null
+    ): ?int
+    {
+        $order = $this->find($orderId);
+        if (!$order) {
+            error_log("[Order] Auto-assign #{$orderId}: order not found");
+            return null;
+        }
+
+        if (!in_array($order['status'], ['pending', 'processing'], true)) {
+            error_log("[Order] Auto-assign #{$orderId}: skip, status={$order['status']}");
+            return null;
+        }
+
+        $trackingStmt = $this->getConnection()->prepare(
+            'SELECT shipper_id FROM shipping_tracking WHERE order_id = ? LIMIT 1'
+        );
+        $trackingStmt->execute([$orderId]);
+        $existing = $trackingStmt->fetch(PDO::FETCH_ASSOC);
+        if (is_array($existing) && !empty($existing['shipper_id'])) {
+            error_log("[Order] Auto-assign #{$orderId}: already has shipper_id={$existing['shipper_id']}");
+            return (int) $existing['shipper_id'];
+        }
+
+        $shipperSql = "
+            SELECT
+                s.user_id,
+                COUNT(CASE WHEN o.status IN ('processing', 'shipping') THEN 1 END) AS active_orders
+            FROM shippers s
+            LEFT JOIN shipping_tracking st ON st.shipper_id = s.user_id
+            LEFT JOIN orders o ON o.order_id = st.order_id
+            WHERE s.is_available = 1 AND s.status = 'active'
+        ";
+        $params = [];
+        if ($excludeShipperId !== null && $excludeShipperId > 0) {
+            $shipperSql .= ' AND s.user_id != ?';
+            $params[] = $excludeShipperId;
+        }
+        $shipperSql .= '
+            GROUP BY s.user_id, s.rating, s.on_time_delivery_pct
+            ORDER BY active_orders ASC, s.rating DESC, s.on_time_delivery_pct DESC
+            LIMIT 1
+        ';
+        $shipperStmt = $this->getConnection()->prepare($shipperSql);
+        $shipperStmt->execute($params);
+        $shipper = $shipperStmt->fetch(PDO::FETCH_ASSOC);
+        if (!is_array($shipper) || empty($shipper['user_id'])) {
+            error_log("[Order] Auto-assign #{$orderId}: no available active shipper");
+            return null;
+        }
+
+        $shipperId = (int) $shipper['user_id'];
+        if (!$this->assignShipper($orderId, $shipperId, $assignedBy)) {
+            error_log("[Order] Auto-assign #{$orderId}: assignShipper failed for shipper_id={$shipperId}");
+            return null;
+        }
+
+        if ($order['status'] === 'pending') {
+            $this->updateStatus($orderId, 'processing', $assignedBy, $note);
+        }
+
+        try {
+            $this->forceShippingStatus($orderId, 'new_request', $shipperId, ['note' => $note]);
+        } catch (Exception $e) {
+            error_log("[Order] Auto-assign #{$orderId}: forceShippingStatus failed: " . $e->getMessage());
+        }
+
+        error_log("[Order] Auto-assign #{$orderId}: success shipper_id={$shipperId}");
+        return $shipperId;
+    }
+
     public function getStatistics(): array
     {
         $sql = "

@@ -649,25 +649,20 @@ class OrderController extends Controller
             $trackingStmt = $pdo->prepare($trackingSql);
             $trackingStmt->execute([$id]);
             $existingAssignment = $trackingStmt->fetch(PDO::FETCH_ASSOC);
+            $hasExistingAssignment = is_array($existingAssignment);
             $shouldResetShippingStatus = false;
-            
-            if ($existingAssignment) {
-                $currentShipperId = (int)$existingAssignment['shipper_id'];
-                
-                // Nếu đang gán lại cho cùng shipper → OK
-                if ($currentShipperId === (int)$data['shipper_id']) {
+            $oldShipperId = null;
+
+            if ($hasExistingAssignment) {
+                $currentShipperId = (int) ($existingAssignment['shipper_id'] ?? 0);
+
+                // Nếu đang gán lại cho cùng shipper → OK (kể cả đơn processing sau thanh toán)
+                if ($currentShipperId === (int) $data['shipper_id']) {
                     $updatedOrder = $this->orderModel->getByIdWithDetails($id);
                     return $res->json(ResponseHelper::success($updatedOrder, 'Shipper already assigned to this order'));
                 }
-                
-                // Nếu đơn đang ở status 'shipping' → không cho phép thay đổi shipper
-                if ($order['status'] === 'shipping') {
-                    return $res->json(ResponseHelper::forbidden(
-                        'Cannot reassign shipper. Order is already being delivered. Please cancel the order first if you need to change shipper.'
-                    ));
-                }
-                
-                // Nếu đơn ở 'processing' → cho phép thay đổi shipper
+
+                // Đơn processing/pending: cho phép đổi shipper
                 $oldShipperId = $currentShipperId;
                 $shouldResetShippingStatus = true;
             }
@@ -686,12 +681,11 @@ class OrderController extends Controller
                 return $res->json(ResponseHelper::forbidden('Shipper is not available or inactive'));
             }
             
-            if (!$existingAssignment) {
+            if (!$hasExistingAssignment) {
                 $shouldResetShippingStatus = true;
             }
 
-            // 5. Gán shipper
-            $oldShipperId = $existingAssignment['shipper_id'] ?? null;
+            // 5. Gán shipper (lần đầu hoặc đổi shipper khi pending/processing)
             $result = $this->orderModel->assignShipper($id, $data['shipper_id'], $assignedBy);
             
             if (!$result) {
@@ -704,7 +698,7 @@ class OrderController extends Controller
             }
             
             // 7. Log thay đổi shipper nếu có
-            if ($existingAssignment && isset($oldShipperId) && $oldShipperId !== (int)$data['shipper_id']) {
+            if ($hasExistingAssignment && $oldShipperId !== null && $oldShipperId !== (int) $data['shipper_id']) {
                 $this->orderModel->logActivity(
                     $id, 
                     'reassign_shipper', 
@@ -767,8 +761,8 @@ class OrderController extends Controller
                 error_log('[OrderController] Admin shipper notification: ' . $e->getMessage());
             }
             
-            $message = $existingAssignment && isset($oldShipperId) && $oldShipperId !== (int)$data['shipper_id']
-                ? 'Shipper reassigned successfully' 
+            $message = $hasExistingAssignment && $oldShipperId !== null && $oldShipperId !== (int) $data['shipper_id']
+                ? 'Shipper reassigned successfully'
                 : 'Shipper assigned successfully';
                 
             return $res->json(ResponseHelper::success($updatedOrder, $message));
@@ -969,7 +963,9 @@ class OrderController extends Controller
             $payload = $this->parseShippingPayload($req);
 
             try {
-                $updatedOrder = $this->performShippingTransition($orderId, $shipperId, 'delivering', $payload);
+                $updatedOrder = $this->performShippingTransition($orderId, $shipperId, 'delivering', $payload, [
+                    'update_order_status' => 'shipping',
+                ]);
                 return $res->json(ResponseHelper::success($updatedOrder, 'Delivery started'));
             } catch (Exception $workflowException) {
                 return $this->shippingErrorResponse($res, $workflowException);
@@ -1048,10 +1044,56 @@ class OrderController extends Controller
             }
 
             try {
-                $updatedOrder = $this->performShippingTransition($orderId, $shipperId, 'rejected', $payload);
+                $this->performShippingTransition($orderId, $shipperId, 'rejected', $payload);
+
+                $pdo = $this->container->database()->getConnection();
+                $rejectNote = trim((string) ($payload['note'] ?? ''));
+                $shipperName = $this->resolveShipperDisplayName($pdo, $shipperId);
 
                 try {
-                    $pdo = $this->container->database()->getConnection();
+                    (new AdminNotificationService($pdo))->notifyOrderRejected(
+                        $orderId,
+                        $shipperId,
+                        $shipperName,
+                        $rejectNote
+                    );
+                } catch (\Throwable $notifyEx) {
+                    error_log('[OrderController] rejectOrder admin notification: ' . $notifyEx->getMessage());
+                }
+
+                $this->orderModel->updateStatus(
+                    $orderId,
+                    'processing',
+                    $shipperId,
+                    'Shipper rejected order: ' . ($rejectNote !== '' ? $rejectNote : 'no reason')
+                );
+                $this->orderModel->clearShipperAssignment($orderId);
+
+                $newShipperId = $this->orderModel->autoAssignBestAvailableShipper(
+                    $orderId,
+                    1,
+                    'Reassigned after rejection',
+                    $shipperId
+                );
+
+                $adminNotif = new AdminNotificationService($pdo);
+                if ($newShipperId !== null) {
+                    $newShipperName = $this->resolveShipperDisplayName($pdo, $newShipperId);
+                    try {
+                        $adminNotif->notifyOrderReassigned($orderId, $newShipperId, $newShipperName);
+                    } catch (\Throwable $notifyEx) {
+                        error_log('[OrderController] rejectOrder reassign notify: ' . $notifyEx->getMessage());
+                    }
+                    $this->notifyShipperAssigned($pdo, $orderId, $newShipperId);
+                } else {
+                    try {
+                        $adminNotif->notifyOrderReassignFailed($orderId);
+                    } catch (\Throwable $notifyEx) {
+                        error_log('[OrderController] rejectOrder reassign failed notify: ' . $notifyEx->getMessage());
+                    }
+                }
+
+                try {
                     $notificationService = new NotificationService($pdo);
                     $notificationService->sendPushNotification(
                         $shipperId,
@@ -1064,9 +1106,10 @@ class OrderController extends Controller
                         'order_rejected_by_shipper'
                     );
                 } catch (\Throwable $notifyEx) {
-                    error_log('[OrderController] rejectOrder notification: ' . $notifyEx->getMessage());
+                    error_log('[OrderController] rejectOrder shipper push: ' . $notifyEx->getMessage());
                 }
 
+                $updatedOrder = $this->orderModel->getByIdWithDetails($orderId);
                 return $res->json(ResponseHelper::success($updatedOrder, 'Order rejected'));
             } catch (Exception $workflowException) {
                 return $this->shippingErrorResponse($res, $workflowException);
@@ -1367,78 +1410,43 @@ class OrderController extends Controller
 
     private function autoAssignOrderToBestAvailableShipper(int $orderId, int $assignedBy, string $note = 'Auto-assigned by system'): bool
     {
-        $order = $this->orderModel->find($orderId);
-        if (!$order) {
-            return false;
-        }
-
-        if (!in_array($order['status'], ['pending', 'processing'], true)) {
+        $shipperId = $this->orderModel->autoAssignBestAvailableShipper($orderId, $assignedBy, $note);
+        if ($shipperId === null) {
             return false;
         }
 
         $pdo = $this->container->database()->getConnection();
+        $this->notifyShipperAssigned($pdo, $orderId, $shipperId);
 
-        $trackingStmt = $pdo->prepare("SELECT shipper_id FROM shipping_tracking WHERE order_id = ? LIMIT 1");
-        $trackingStmt->execute([$orderId]);
-        $existingAssignment = $trackingStmt->fetch(PDO::FETCH_ASSOC);
-        if ($existingAssignment && !empty($existingAssignment['shipper_id'])) {
-            return true;
+        return true;
+    }
+
+    private function resolveShipperDisplayName(\PDO $pdo, int $shipperUserId): string
+    {
+        $stmt = $pdo->prepare(
+            'SELECT first_name, last_name FROM users WHERE user_id = ? LIMIT 1'
+        );
+        $stmt->execute([$shipperUserId]);
+        $row = $stmt->fetch(\PDO::FETCH_ASSOC);
+        if (!is_array($row)) {
+            return 'Shipper #' . $shipperUserId;
         }
+        $name = trim(($row['first_name'] ?? '') . ' ' . ($row['last_name'] ?? ''));
+        return $name !== '' ? $name : 'Shipper #' . $shipperUserId;
+    }
 
-        $shipperSql = "
-            SELECT
-                s.user_id,
-                COUNT(CASE WHEN o.status IN ('processing', 'shipping') THEN 1 END) AS active_orders
-            FROM shippers s
-            LEFT JOIN shipping_tracking st ON st.shipper_id = s.user_id
-            LEFT JOIN orders o ON o.order_id = st.order_id
-            WHERE s.is_available = 1 AND s.status = 'active'
-            GROUP BY s.user_id, s.rating, s.on_time_delivery_pct
-            ORDER BY active_orders ASC, s.rating DESC, s.on_time_delivery_pct DESC
-            LIMIT 1
-        ";
-        $shipperStmt = $pdo->query($shipperSql);
-        $shipper = $shipperStmt ? $shipperStmt->fetch(PDO::FETCH_ASSOC) : null;
-
-        if (!$shipper || empty($shipper['user_id'])) {
-            return false;
-        }
-
-        $shipperId = (int)$shipper['user_id'];
-        $result = $this->orderModel->assignShipper($orderId, $shipperId, $assignedBy);
-        if (!$result) {
-            return false;
-        }
-
-        if ($order['status'] === 'pending') {
-            $this->orderModel->updateStatus($orderId, 'processing', $assignedBy, $note);
-        }
-
+    private function notifyShipperAssigned(\PDO $pdo, int $orderId, int $shipperId): void
+    {
         try {
-            $this->orderModel->forceShippingStatus(
-                $orderId,
-                'new_request',
-                $shipperId,
-                ['note' => $note]
-            );
-        } catch (Exception $e) {
-            error_log('[OrderController] Auto-assign force shipping status failed: ' . $e->getMessage());
-        }
-
-        try {
-            $notificationService = new NotificationService($pdo);
-            $notificationService->sendPushNotification(
+            (new NotificationService($pdo))->sendPushNotification(
                 $shipperId,
                 'Đơn hàng mới được gán',
                 "Bạn có đơn hàng #{$orderId} mới cần xử lý",
-                [
-                    'order_id' => $orderId,
-                    'type' => 'new_order_assigned'
-                ],
+                ['order_id' => $orderId, 'type' => 'new_order_assigned'],
                 'new_order_assigned'
             );
         } catch (Exception $e) {
-            error_log('[OrderController] Auto-assign push notification failed: ' . $e->getMessage());
+            error_log('[OrderController] Shipper push notification failed: ' . $e->getMessage());
         }
 
         try {
@@ -1446,8 +1454,6 @@ class OrderController extends Controller
         } catch (Exception $e) {
             error_log('[OrderController] Admin shipper notification: ' . $e->getMessage());
         }
-
-        return true;
     }
 
     /**
