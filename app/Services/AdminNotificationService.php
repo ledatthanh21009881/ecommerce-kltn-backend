@@ -15,6 +15,9 @@ final class AdminNotificationService
     public const TYPE_NEW_ORDER = 'new_order';
     public const TYPE_PAYMENT_UPDATE = 'payment_update';
     public const TYPE_ORDER_ASSIGNED = 'order_assigned';
+    public const TYPE_ORDER_REJECTED = 'order_rejected';
+    public const TYPE_ORDER_REASSIGNED = 'order_reassigned';
+    public const TYPE_ORDER_REASSIGN_FAILED = 'order_reassign_failed';
 
     public function __construct(private PDO $pdo)
     {
@@ -141,6 +144,40 @@ final class AdminNotificationService
             'Đơn #' . $orderId . ' đã gán tài xế (shipper #' . $shipperId . ').',
             $orderId,
             $shipperId
+        );
+    }
+
+    public function notifyOrderRejected(int $orderId, int $shipperId, string $shipperName, string $note): void
+    {
+        $reason = trim($note) !== '' ? trim($note) : '(không ghi lý do)';
+        $this->create(
+            self::TYPE_ORDER_REJECTED,
+            'Shipper từ chối đơn',
+            'Đơn #' . $orderId . ' — ' . $shipperName . ': "' . $reason . '"',
+            $orderId,
+            $shipperId
+        );
+    }
+
+    public function notifyOrderReassigned(int $orderId, int $newShipperId, string $shipperName): void
+    {
+        $this->create(
+            self::TYPE_ORDER_REASSIGNED,
+            'Đã gán lại shipper',
+            'Đơn #' . $orderId . ' đã gán lại cho ' . $shipperName . ' (shipper #' . $newShipperId . ').',
+            $orderId,
+            $newShipperId
+        );
+    }
+
+    public function notifyOrderReassignFailed(int $orderId): void
+    {
+        $this->create(
+            self::TYPE_ORDER_REASSIGN_FAILED,
+            'Cần gán shipper thủ công',
+            'Đơn #' . $orderId . ' bị từ chối nhưng không còn shipper rảnh để tự gán lại.',
+            $orderId,
+            null
         );
     }
 }
