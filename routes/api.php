@@ -499,6 +499,7 @@ $router->get('/api/v1/orders-test/statistics', function($req, $res) use ($contai
 // SHIPPER API ROUTES
 // ========================================
 $router->get('/api/v1/shipper/orders', [OrderController::class, 'shipperOrders'], [new AuthMiddleware($container)]);
+$router->get('/api/v1/shipper/orders/history/{type}', [OrderController::class, 'shipperOrderHistory'], [new AuthMiddleware($container)]);
 $router->get('/api/v1/shipper/orders/{id}', [OrderController::class, 'shipperOrderDetail'], [new AuthMiddleware($container)]);
 $router->post('/api/v1/shipper/orders/{id}/accept', [OrderController::class, 'acceptOrder'], [new AuthMiddleware($container)]);
 $router->post('/api/v1/shipper/orders/{id}/pickup', [OrderController::class, 'pickupOrder'], [new AuthMiddleware($container)]);

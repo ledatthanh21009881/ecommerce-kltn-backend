@@ -838,6 +838,46 @@ class OrderController extends Controller
         }
     }
 
+    /**
+     * GET /api/v1/shipper/orders/history/{type} — type: completed | rejected
+     * Lịch sử từ order_delivery_events (không phụ thuộc shipping_tracking).
+     */
+    public function shipperOrderHistory(Request $req, Response $res)
+    {
+        try {
+            $user = $req->getAttribute('user');
+            $shipperId = (int) ($user['user_id'] ?? 0);
+
+            if (!$shipperId) {
+                return $res->json(ResponseHelper::unauthorized('Shipper ID not found in token'));
+            }
+
+            $pdo = $this->container->database()->getConnection();
+            $stmt = $pdo->prepare('SELECT user_id FROM shippers WHERE user_id = ?');
+            $stmt->execute([$shipperId]);
+            if (!$stmt->fetch(PDO::FETCH_ASSOC)) {
+                return $res->json(ResponseHelper::forbidden('User is not a shipper'));
+            }
+
+            $type = strtolower(trim((string) ($req->getAttribute('type') ?? '')));
+            if (!in_array($type, ['completed', 'rejected'], true)) {
+                return $res->json(ResponseHelper::badRequest('Invalid history type. Use completed or rejected.'));
+            }
+
+            $page = max(1, (int) ($req->query('page') ?? 1));
+            $limit = max(1, min(100, (int) ($req->query('limit') ?? 20)));
+            $offset = ($page - 1) * $limit;
+
+            $orders = $this->orderModel->getShipperOrderHistory($shipperId, $type, $limit, $offset);
+            $total = $this->orderModel->getShipperOrderHistoryCount($shipperId, $type);
+
+            return $res->json(ResponseHelper::paginated($orders, $total, $limit, $page));
+        } catch (Exception $e) {
+            error_log('[Shipper Order History] Error: ' . $e->getMessage());
+            return $res->json(ResponseHelper::serverError('Failed to fetch shipper order history: ' . $e->getMessage()));
+        }
+    }
+
     public function shipperOrderDetail(Request $req, Response $res)
     {
         try {

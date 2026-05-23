@@ -984,4 +984,77 @@ class Order extends Model
     {
         return $this->updateShippingStatus($orderId, $status, $shipperId, $eventData, true);
     }
+
+    /**
+     * Lịch sử đơn theo sự kiện shipper (completed / rejected) — không phụ thuộc shipping_tracking.
+     */
+    public function getShipperOrderHistory(int $shipperId, string $eventStatusTo, int $limit = 20, int $offset = 0): array
+    {
+        $sql = "
+            SELECT
+                o.*,
+                c.loyalty_points,
+                c.total_orders,
+                u.first_name,
+                u.last_name,
+                u.email,
+                u.phone,
+                sm.name as shipping_method_name,
+                v.code as voucher_code,
+                v.discount_type as voucher_discount_type,
+                v.discount_amount as voucher_discount_amount,
+                e.created_at AS history_event_at,
+                e.status_to AS history_status_to,
+                (SELECT COUNT(*) FROM order_items oi WHERE oi.order_id = o.order_id) as item_count
+            FROM order_delivery_events e
+            INNER JOIN {$this->table} o ON o.order_id = e.order_id
+            INNER JOIN (
+                SELECT order_id, MAX(created_at) AS max_created
+                FROM order_delivery_events
+                WHERE shipper_id = ? AND status_to = ?
+                GROUP BY order_id
+            ) latest ON latest.order_id = e.order_id
+                AND latest.max_created = e.created_at
+            LEFT JOIN customers c ON o.customer_id = c.user_id
+            LEFT JOIN users u ON c.user_id = u.user_id
+            LEFT JOIN shipping_methods sm ON o.shipping_method_id = sm.shipping_method_id
+            LEFT JOIN vouchers v ON o.voucher_id = v.voucher_id
+            WHERE e.shipper_id = ? AND e.status_to = ?
+            ORDER BY e.created_at DESC
+            LIMIT ? OFFSET ?
+        ";
+
+        $params = [$shipperId, $eventStatusTo, $shipperId, $eventStatusTo, $limit, $offset];
+        $stmt = $this->getConnection()->prepare($sql);
+        $stmt->execute($params);
+        $orders = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+        foreach ($orders as &$order) {
+            $order['items'] = $this->getOrderItems((int)$order['order_id']);
+
+            if (!empty($order['shipping_address_snapshot'])) {
+                $addressData = json_decode($order['shipping_address_snapshot'], true);
+                if ($addressData) {
+                    $order['shipping_address'] = $addressData;
+                }
+            }
+
+            $order['delivery_events'] = $this->getDeliveryEvents((int)$order['order_id']);
+            $order['delivery_proofs'] = $this->getDeliveryProofs((int)$order['order_id']);
+        }
+
+        return $orders;
+    }
+
+    public function getShipperOrderHistoryCount(int $shipperId, string $eventStatusTo): int
+    {
+        $sql = "
+            SELECT COUNT(DISTINCT order_id)
+            FROM order_delivery_events
+            WHERE shipper_id = ? AND status_to = ?
+        ";
+        $stmt = $this->getConnection()->prepare($sql);
+        $stmt->execute([$shipperId, $eventStatusTo]);
+        return (int) $stmt->fetchColumn();
+    }
 }
