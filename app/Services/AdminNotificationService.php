@@ -18,6 +18,7 @@ final class AdminNotificationService
     public const TYPE_ORDER_REJECTED = 'order_rejected';
     public const TYPE_ORDER_REASSIGNED = 'order_reassigned';
     public const TYPE_ORDER_REASSIGN_FAILED = 'order_reassign_failed';
+    public const TYPE_ORDER_ACCEPT_TIMEOUT = 'order_accept_timeout';
 
     public function __construct(private PDO $pdo)
     {
@@ -176,6 +177,28 @@ final class AdminNotificationService
             self::TYPE_ORDER_REASSIGN_FAILED,
             'Cần gán shipper thủ công',
             'Đơn #' . $orderId . ' bị từ chối nhưng không còn shipper rảnh để tự gán lại.',
+            $orderId,
+            null
+        );
+    }
+
+    public function notifyAcceptTimeoutNoShipper(int $orderId, int $timeoutMinutes): void
+    {
+        $this->create(
+            self::TYPE_ORDER_ACCEPT_TIMEOUT,
+            'Không có shipper nhận đơn',
+            'Đơn #' . $orderId . ' quá ' . $timeoutMinutes . ' phút không được chấp nhận và không còn shipper rảnh để tự gán.',
+            $orderId,
+            null
+        );
+    }
+
+    public function notifyAcceptTimeoutExhausted(int $orderId, int $maxAttempts): void
+    {
+        $this->create(
+            self::TYPE_ORDER_ACCEPT_TIMEOUT,
+            'Cần xử lý đơn thủ công',
+            'Đơn #' . $orderId . ' đã quá ' . $maxAttempts . ' lần tự gán lại do hết thời gian chấp nhận. Vui lòng gán shipper thủ công.',
             $orderId,
             null
         );
