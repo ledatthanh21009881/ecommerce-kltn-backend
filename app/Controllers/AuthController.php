@@ -507,21 +507,65 @@ class AuthController extends Controller
     
     public function refresh(Request $req, Response $res)
     {
-        // Get current user from JWT
-        $user = $req->getAttribute('user');
-        
-        if (!$user) {
-            return $res->json(ResponseHelper::unauthorized('Invalid token'));
+        // Refresh phải hoạt động kể cả khi access token đã hết hạn,
+        // nên xác thực dựa trên refresh_token gửi trong body, không cần AuthMiddleware.
+        $data = $req->json();
+        $refreshToken = $data['refresh_token'] ?? null;
+
+        if (!$refreshToken) {
+            return $res->json(ResponseHelper::error('Refresh token is required', 400));
         }
-        
-        // Generate new token
-        $token = $this->jwt->encode([
-            'user_id' => $user['user_id'],
-            'account_id' => $user['account_id'],
-            'roles' => $user['roles']
-        ]);
-        
-        return $res->json(ResponseHelper::success(['token' => $token], 'Token refreshed'));
+
+        try {
+            $tokenData = $this->refreshTokenModel->findByToken($refreshToken);
+            if (!$tokenData) {
+                return $res->json(ResponseHelper::unauthorized('Invalid or expired refresh token'));
+            }
+
+            $pdo = $this->container->database()->getConnection();
+            $sql = "SELECT u.*, a.account_name, r.role_name FROM users u
+                    JOIN accounts a ON u.account_id = a.account_id
+                    LEFT JOIN user_roles ur ON u.user_id = ur.user_id
+                    LEFT JOIN roles r ON ur.role_id = r.role_id
+                    WHERE u.user_id = ?";
+            $stmt = $pdo->prepare($sql);
+            $stmt->execute([$tokenData['user_id']]);
+            $userData = $stmt->fetchAll();
+
+            if (!$userData) {
+                return $res->json(ResponseHelper::unauthorized('User not found'));
+            }
+
+            $user = $userData[0];
+            $roles = [];
+            foreach ($userData as $row) {
+                if ($row['role_name']) {
+                    $roles[] = $row['role_name'];
+                }
+            }
+
+            $newAccessToken = $this->jwt->encode([
+                'user_id' => $user['user_id'],
+                'account_id' => $user['account_id'],
+                'account_name' => $user['account_name'],
+                'roles' => $roles,
+                'is_admin' => in_array('admin', $roles)
+            ]);
+
+            // Rotate refresh token để tăng bảo mật.
+            $newRefreshToken = $this->refreshTokenModel->generateRefreshToken();
+            $this->refreshTokenModel->revokeToken($refreshToken);
+            $this->refreshTokenModel->createToken($user['user_id'], $newRefreshToken);
+
+            // Trả `token` (alias cho client cũ) và `access_token`/`refresh_token` (chuẩn mới).
+            return $res->json(ResponseHelper::success([
+                'token' => $newAccessToken,
+                'access_token' => $newAccessToken,
+                'refresh_token' => $newRefreshToken,
+            ], 'Token refreshed'));
+        } catch (Exception $e) {
+            return $res->json(ResponseHelper::serverError('Token refresh failed: ' . $e->getMessage()));
+        }
     }
     
     public function profile(Request $req, Response $res)

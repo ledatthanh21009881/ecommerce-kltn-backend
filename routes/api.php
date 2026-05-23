@@ -24,7 +24,8 @@ $router->get('/api/v1/auth/admin/me', [AuthController::class, 'adminMe'], [new A
 $router->put('/api/v1/auth/admin/locale', [AuthController::class, 'updateAdminLocale'], [new AuthMiddleware($container)]);
 $router->post('/api/v1/auth/register', [AuthController::class, 'register']);
 $router->post('/api/v1/auth/logout', [AuthController::class, 'logout'], [new AuthMiddleware($container)]);
-$router->post('/api/v1/auth/refresh', [AuthController::class, 'refresh'], [new AuthMiddleware($container)]);
+// Refresh phải chấp nhận access token đã hết hạn; chỉ verify refresh_token trong body.
+$router->post('/api/v1/auth/refresh', [AuthController::class, 'refresh']);
 $router->post('/api/v1/auth/refresh-advanced', [AuthController::class, 'refreshTokenAdvanced']);
 $router->post('/api/v1/auth/logout-advanced', [AuthController::class, 'logoutAdvanced'], [new AuthMiddleware($container)]);
 $router->post('/api/v1/auth/forgot-password', [AuthController::class, 'forgotPassword']);
@@ -54,9 +55,9 @@ $router->get('/api/mobile/v1/config', function($req, $res) {
     }
     if ($explicit !== '') {
         $apiUrl = rtrim($explicit, '/');
-        $parsed = parse_url($apiUrl);
+        $parsed = parse_url($apiUrl) ?: [];
         if (!empty($parsed['host'])) {
-            $serverIP = $parsed['host'];
+            $serverIP = (string) $parsed['host'];
         }
         if (!empty($parsed['port'])) {
             $port = (int) $parsed['port'];
@@ -76,9 +77,9 @@ $router->get('/api/mobile/v1/config', function($req, $res) {
             $forParse = strpos($hostHeader, '[') === 0
                 ? ('http://' . $hostHeader)
                 : ('http://' . $hostHeader);
-            $parsedH = parse_url($forParse);
+            $parsedH = parse_url($forParse) ?: [];
             if (!empty($parsedH['host'])) {
-                $serverIP = $parsedH['host'];
+                $serverIP = (string) $parsedH['host'];
             }
             if (!empty($parsedH['port'])) {
                 $port = (int) $parsedH['port'];
