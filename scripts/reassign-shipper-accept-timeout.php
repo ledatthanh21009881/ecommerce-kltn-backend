@@ -21,6 +21,8 @@ if (file_exists($root . '/.env')) {
     Dotenv\Dotenv::createImmutable($root)->safeLoad();
 }
 
+\App\Support\AppTimezone::apply();
+
 use App\Core\Database;
 use App\Domain\Orders\Order;
 use App\Services\ShipperAcceptTimeoutService;

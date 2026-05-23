@@ -11,6 +11,8 @@ use App\Services\WebSocketService;
 $dotenv = Dotenv\Dotenv::createImmutable(__DIR__);
 $dotenv->load();
 
+\App\Support\AppTimezone::apply();
+
 // Create WebSocket service
 $webSocketService = new WebSocketService();
 

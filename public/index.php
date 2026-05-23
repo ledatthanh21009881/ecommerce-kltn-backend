@@ -31,6 +31,8 @@ if (file_exists(__DIR__.'/../.env')) {
     \Dotenv\Dotenv::createImmutable(__DIR__.'/../')->safeLoad();
 }
 
+\App\Support\AppTimezone::apply();
+
 use App\Core\Router;
 use App\Core\Request;
 use App\Core\Response;
