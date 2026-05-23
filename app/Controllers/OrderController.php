@@ -1031,10 +1031,7 @@ class OrderController extends Controller
 
             try {
                 $updatedOrder = $this->performShippingTransition($orderId, $shipperId, 'arrived', $payload, [
-                    'require_photo' => true,
                     'require_location' => true,
-                    'require_proof' => true,
-                    'proof_type' => 'arrival_photo',
                 ]);
                 return $res->json(ResponseHelper::success($updatedOrder, 'Arrival confirmed'));
             } catch (Exception $workflowException) {
