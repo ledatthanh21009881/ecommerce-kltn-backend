@@ -47,7 +47,7 @@ class Conversation
      */
     public function getConversationsWithLastMessageForAdmin(): array
     {
-        $sql = "SELECT c.*, u.first_name, u.last_name, u.email, u.avatar_url, 
+        $sql = "SELECT c.*, u.first_name, u.last_name, u.email, u.avatar_url,
                        CASE
                          WHEN m.message_id IS NULL THEN NULL
                          WHEN NULLIF(TRIM(m.content), '') IS NOT NULL THEN m.content
@@ -59,7 +59,17 @@ class Conversation
                         WHERE mu.conversation_id = c.conversation_id
                           AND mu.is_read = 0
                           AND mu.deleted_at IS NULL
-                          AND mu.sender_id = c.customer_id) as unread_count
+                          AND mu.sender_id = c.customer_id) as unread_count,
+                       CASE
+                         WHEN EXISTS (SELECT 1 FROM shippers s WHERE s.user_id = c.customer_id) THEN 'shipper'
+                         WHEN EXISTS (
+                           SELECT 1 FROM user_roles ur
+                           JOIN roles r ON r.role_id = ur.role_id
+                           WHERE ur.user_id = c.customer_id
+                             AND r.role_name NOT IN ('admin', 'customer', 'shipper')
+                         ) THEN 'staff'
+                         ELSE 'customer'
+                       END as user_role
                 FROM conversations c
                 JOIN users u ON u.user_id = c.customer_id
                 LEFT JOIN messages m ON m.message_id = (SELECT message_id FROM messages WHERE conversation_id = c.conversation_id ORDER BY sent_at DESC LIMIT 1)
