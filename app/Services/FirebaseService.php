@@ -53,25 +53,32 @@ class FirebaseService
                 return false;
             }
 
+            // Determine channel based on notification type
+            $type = $data['type'] ?? '';
+            $channelId = (strpos($type, 'chat') !== false) ? 'messages' : 'orders';
+
             $notification = Notification::create($title, $message);
-            
-            $message = CloudMessage::withTarget('token', $fcmToken)
+
+            $cloudMessage = CloudMessage::withTarget('token', $fcmToken)
                 ->withNotification($notification)
                 ->withData($data);
 
-            // Android-specific configuration
+            // Android-specific configuration: high priority + correct channel for system notification
             $androidConfig = AndroidConfig::fromArray([
                 'priority' => 'high',
                 'notification' => [
                     'sound' => 'default',
-                    'channel_id' => 'default',
+                    'channel_id' => $channelId,
+                    'default_sound' => true,
+                    'default_vibrate_timings' => true,
+                    'notification_priority' => 'PRIORITY_MAX',
                 ],
             ]);
-            $message = $message->withAndroidConfig($androidConfig);
+            $cloudMessage = $cloudMessage->withAndroidConfig($androidConfig);
 
-            $result = $this->messaging->send($message);
-            
-            error_log('[FirebaseService] Notification sent successfully. Message ID: ' . $result);
+            $result = $this->messaging->send($cloudMessage);
+
+            error_log('[FirebaseService] Notification sent successfully. Channel: ' . $channelId . '. Message ID: ' . $result);
             return true;
 
         } catch (MessagingException $e) {
