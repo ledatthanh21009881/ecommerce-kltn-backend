@@ -9,6 +9,7 @@ use App\Domain\Payments\Payment;
 use App\Services\Payment\{MockQRPaymentService, VNPayPaymentService, VietQRPaymentService, CODPaymentService, PayOSPaymentService};
 use App\Support\GeocodingService;
 use App\Support\ResponseHelper;
+use App\Support\ShipperCapacity;
 use App\Core\Validator;
 use App\Services\AdminNotificationService;
 use App\Services\NotificationService;
@@ -680,6 +681,17 @@ class OrderController extends Controller
             
             if (!$shipper['is_available'] || $shipper['status'] !== 'active') {
                 return $res->json(ResponseHelper::forbidden('Shipper is not available or inactive'));
+            }
+
+            $newShipperId = (int) $data['shipper_id'];
+            $excludeOrderId = null;
+            if ($hasExistingAssignment && isset($currentShipperId) && $currentShipperId === $newShipperId) {
+                $excludeOrderId = $id;
+            }
+            if (!ShipperCapacity::hasCapacity($pdo, $newShipperId, $excludeOrderId)) {
+                return $res->json(ResponseHelper::forbidden(
+                    ShipperCapacity::forbiddenMessage($pdo, $newShipperId, $excludeOrderId)
+                ));
             }
             
             if (!$hasExistingAssignment) {

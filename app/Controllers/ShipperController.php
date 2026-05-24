@@ -8,6 +8,7 @@ use App\Core\Controller;
 use App\Core\Request;
 use App\Core\Response;
 use App\Support\ResponseHelper;
+use App\Support\ShipperCapacity;
 use PDO;
 use Exception;
 
@@ -529,11 +530,22 @@ class ShipperController extends Controller
                 }
 
                 // Check if order is already assigned
-                $existingSql = "SELECT tracking_id FROM shipping_tracking WHERE order_id = :order_id";
+                $existingSql = "SELECT tracking_id, shipper_id FROM shipping_tracking WHERE order_id = :order_id";
                 $existingStmt = $this->pdo->prepare($existingSql);
                 $existingStmt->bindValue(':order_id', $orderId, PDO::PARAM_INT);
                 $existingStmt->execute();
                 $existing = $existingStmt->fetch(PDO::FETCH_ASSOC);
+
+                $excludeOrderId = null;
+                if (
+                    is_array($existing)
+                    && (int) ($existing['shipper_id'] ?? 0) === $shipperId
+                ) {
+                    $excludeOrderId = $orderId;
+                }
+                if (!ShipperCapacity::hasCapacity($this->pdo, $shipperId, $excludeOrderId)) {
+                    throw new Exception(ShipperCapacity::forbiddenMessage($this->pdo, $shipperId, $excludeOrderId));
+                }
 
                 if ($existing) {
                     // Update existing assignment

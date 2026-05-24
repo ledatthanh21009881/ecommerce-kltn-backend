@@ -4,6 +4,7 @@ declare(strict_types=1);
 namespace App\Domain\Orders;
 
 use App\Core\Model;
+use App\Support\ShipperCapacity;
 use PDO;
 use Exception;
 
@@ -545,16 +546,23 @@ class Order extends Model
             $shipperSql .= ' AND s.user_id != ?';
             $params[] = $excludeShipperId;
         }
+        $maxActive = ShipperCapacity::maxActiveOrders();
         $shipperSql .= '
             GROUP BY s.user_id, s.rating, s.on_time_delivery_pct
+            HAVING active_orders < ?
             ORDER BY active_orders ASC, s.rating DESC, s.on_time_delivery_pct DESC
             LIMIT 1
         ';
+        $params[] = $maxActive;
         $shipperStmt = $this->getConnection()->prepare($shipperSql);
         $shipperStmt->execute($params);
         $shipper = $shipperStmt->fetch(PDO::FETCH_ASSOC);
         if (!is_array($shipper) || empty($shipper['user_id'])) {
-            error_log("[Order] Auto-assign #{$orderId}: no available active shipper");
+            error_log(
+                "[Order] Auto-assign #{$orderId}: no available active shipper under capacity (max="
+                . $maxActive
+                . ')'
+            );
             return null;
         }
 
@@ -600,6 +608,7 @@ class Order extends Model
 
     public function getAvailableShippers(): array
     {
+        $maxActive = ShipperCapacity::maxActiveOrders();
         $sql = "
             SELECT 
                 s.user_id,
@@ -610,15 +619,29 @@ class Order extends Model
                 s.is_available,
                 u.first_name,
                 u.last_name,
-                u.phone
+                u.phone,
+                COUNT(CASE WHEN o.status IN ('processing', 'shipping') THEN 1 END) AS active_orders,
+                ? AS max_active_orders
             FROM shippers s
             LEFT JOIN users u ON s.user_id = u.user_id
+            LEFT JOIN shipping_tracking st ON st.shipper_id = s.user_id
+            LEFT JOIN orders o ON o.order_id = st.order_id
             WHERE s.is_available = 1 AND s.status = 'active'
-            ORDER BY s.rating DESC, s.on_time_delivery_pct DESC
+            GROUP BY s.user_id, s.vehicle_info, s.rating, s.on_time_delivery_pct, s.total_delivered,
+                     s.is_available, u.first_name, u.last_name, u.phone
+            ORDER BY active_orders ASC, s.rating DESC, s.on_time_delivery_pct DESC
         ";
-        
-        $stmt = $this->getConnection()->query($sql);
-        return $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+        $stmt = $this->getConnection()->prepare($sql);
+        $stmt->execute([$maxActive]);
+        $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+        foreach ($rows as &$row) {
+            $active = (int) ($row['active_orders'] ?? 0);
+            $row['has_capacity'] = $active < $maxActive;
+        }
+
+        return $rows;
     }
 
     private function generateInvoiceNumber(): string
