@@ -1,9 +1,7 @@
 <?php
 declare(strict_types=1);
 
-// Enable error reporting for debugging
 error_reporting(E_ALL);
-ini_set('display_errors', 1);
 ini_set('log_errors', 1);
 ini_set('error_log', __DIR__.'/../storage/logs/php_errors.log');
 
@@ -30,6 +28,9 @@ require __DIR__.'/../vendor/autoload.php';
 if (file_exists(__DIR__.'/../.env')) {
     \Dotenv\Dotenv::createImmutable(__DIR__.'/../')->safeLoad();
 }
+
+$appDebug = filter_var($_ENV['APP_DEBUG'] ?? false, FILTER_VALIDATE_BOOLEAN);
+ini_set('display_errors', $appDebug ? '1' : '0');
 
 \App\Support\AppTimezone::apply();
 

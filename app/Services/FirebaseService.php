@@ -58,10 +58,11 @@ class FirebaseService
             $channelId = (strpos($type, 'chat') !== false) ? 'messages' : 'orders';
 
             $notification = Notification::create($title, $message);
+            $fcmData = $this->normalizeFcmData($data);
 
             $cloudMessage = CloudMessage::withTarget('token', $fcmToken)
                 ->withNotification($notification)
-                ->withData($data);
+                ->withData($fcmData);
 
             // Android-specific configuration: high priority + correct channel for system notification
             $androidConfig = AndroidConfig::fromArray([
@@ -78,7 +79,12 @@ class FirebaseService
 
             $result = $this->messaging->send($cloudMessage);
 
-            error_log('[FirebaseService] Notification sent successfully. Channel: ' . $channelId . '. Message ID: ' . $result);
+            error_log(
+                '[FirebaseService] Notification sent successfully. Channel: '
+                . $channelId
+                . '. Message ID: '
+                . $this->formatSendResult($result)
+            );
             return true;
 
         } catch (MessagingException $e) {
@@ -117,6 +123,45 @@ class FirebaseService
         }
 
         return $results;
+    }
+
+    /**
+     * FCM data payload values must be strings.
+     *
+     * @param array<string, mixed> $data
+     * @return array<string, string>
+     */
+    private function normalizeFcmData(array $data): array
+    {
+        $normalized = [];
+        foreach ($data as $key => $value) {
+            if (!is_string($key)) {
+                continue;
+            }
+            if ($value === null) {
+                $normalized[$key] = '';
+            } elseif (is_scalar($value)) {
+                $normalized[$key] = (string) $value;
+            } elseif (is_array($value)) {
+                $normalized[$key] = json_encode($value, JSON_UNESCAPED_UNICODE) ?: '[]';
+            } else {
+                $normalized[$key] = json_encode($value, JSON_UNESCAPED_UNICODE) ?: '';
+            }
+        }
+
+        return $normalized;
+    }
+
+    private function formatSendResult(mixed $result): string
+    {
+        if (is_string($result)) {
+            return $result;
+        }
+        if (is_scalar($result)) {
+            return (string) $result;
+        }
+
+        return json_encode($result, JSON_UNESCAPED_UNICODE) ?: gettype($result);
     }
 }
 

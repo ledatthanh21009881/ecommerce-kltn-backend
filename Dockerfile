@@ -15,7 +15,9 @@ RUN docker-php-ext-configure gd --with-freetype --with-jpeg \
 RUN echo "date.timezone = Asia/Ho_Chi_Minh" > /usr/local/etc/php/conf.d/timezone.ini \
     && echo "upload_max_filesize = 20M" > /usr/local/etc/php/conf.d/uploads.ini \
     && echo "post_max_size = 25M" >> /usr/local/etc/php/conf.d/uploads.ini \
-    && echo "max_execution_time = 120" >> /usr/local/etc/php/conf.d/uploads.ini
+    && echo "max_execution_time = 120" >> /usr/local/etc/php/conf.d/uploads.ini \
+    && echo "display_errors = Off" > /usr/local/etc/php/conf.d/production.ini \
+    && echo "log_errors = On" >> /usr/local/etc/php/conf.d/production.ini
 
 COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
 
