@@ -36,6 +36,75 @@ class MessageController extends BaseController
         $this->webSocketService = new WebSocketService();
     }
 
+  /** @param array<string, mixed> $payload */
+    private function emitJson(array $payload, int $statusCode): void
+    {
+        http_response_code($statusCode);
+        $json = json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE);
+        if ($json === false) {
+            http_response_code(500);
+            echo '{"success":false,"message":"JSON encode failed","status_code":500}';
+            return;
+        }
+        echo $json;
+    }
+
+    private function notifyShipperOfCustomerChatMessage(int $conversationId, array $fullMessage): void
+    {
+        if (!$this->container) {
+            return;
+        }
+
+        try {
+            $conv = $this->conversationModel->getByConversationId($conversationId);
+            if (!$conv || empty($conv['label']) || !isset($conv['customer_id'])) {
+                return;
+            }
+
+            $label = (string) $conv['label'];
+            $customerId = (int) $conv['customer_id'];
+            $senderId = (int) ($fullMessage['sender_id'] ?? 0);
+            if ($customerId <= 0 || $senderId !== $customerId) {
+                return;
+            }
+
+            if (!preg_match('/^shipper:(\d+):order:(\d+)$/', $label, $m)) {
+                return;
+            }
+
+            $shipperUserId = (int) $m[1];
+            $orderNumericId = (int) $m[2];
+            $pdo = $this->container->database()->getConnection();
+            $notificationService = new NotificationService($pdo);
+            $preview = trim((string) ($fullMessage['content'] ?? ''));
+            if ($preview === '' || preg_match('/^\[(Image|Ảnh|Video)\]$/iu', $preview)) {
+                $mediaList = $fullMessage['media'] ?? [];
+                $preview = !empty($mediaList) ? '[Ảnh]' : 'Tin nhắn mới';
+            }
+            $fn = trim((string) ($fullMessage['first_name'] ?? ''));
+            $ln = trim((string) ($fullMessage['last_name'] ?? ''));
+            $who = trim($fn . ' ' . $ln) ?: 'Khách hàng';
+            $snippet = function_exists('mb_substr')
+                ? mb_substr($preview, 0, 120)
+                : substr($preview, 0, 120);
+            $notificationService->sendPushNotification(
+                $shipperUserId,
+                'Tin nhắn mới',
+                $who . ': ' . $snippet,
+                [
+                    'type' => 'new_chat_message',
+                    'conversation_id' => $conversationId,
+                    'customer_user_id' => $customerId,
+                    'order_id' => $orderNumericId,
+                    'customer_name' => $who,
+                ],
+                'new_chat_message'
+            );
+        } catch (\Throwable $e) {
+            error_log('[MessageController] Shipper chat notification: ' . $e->getMessage());
+        }
+    }
+
     // Lấy danh sách cuộc hội thoại
     public function getConversations(Request $req, Response $res): void
     {
@@ -275,15 +344,18 @@ class MessageController extends BaseController
     // Gửi tin nhắn
     public function sendMessage(Request $req, Response $res): void
     {
+        $messageId = null;
+        $conversationId = null;
+        $content = '';
+
         try {
             $user = $this->getCurrentUser($req);
             if (!$user) {
-                http_response_code(401);
-                echo json_encode([
+                $this->emitJson([
                     'success' => false,
                     'message' => 'Unauthorized',
-                    'status_code' => 401
-                ]);
+                    'status_code' => 401,
+                ], 401);
                 return;
             }
 
@@ -369,51 +441,38 @@ class MessageController extends BaseController
 
             $messageId = $this->messageModel->create($messageData);
 
-            // Upload media nếu có
-            $mediaUrls = [];
+            // Upload media nếu có (lỗi media không huỷ tin nhắn text)
             if (!empty($mediaFiles)) {
-                foreach ($mediaFiles as $file) {
-                    // Kiểm tra xem file đã được upload chưa (có URL)
-                    if (isset($file['url']) && !empty($file['url'])) {
-                        // File đã được upload, chỉ cần lưu vào database
-                        $mediaData = [
-                            'message_id' => $messageId,
-                            'url' => $file['url'],
-                            'public_id' => $file['public_id'] ?? null,
-                            'type' => $file['type'],
-                            'metadata' => json_encode([
-                                'file_name' => $file['name'] ?? null,
-                                'file_size' => $file['size'] ?? null,
-                                'width' => null,
-                                'height' => null,
-                                'format' => null
-                            ]),
-                            'created_at' => date('Y-m-d H:i:s')
-                        ];
-                        $this->messageMediaModel->create($mediaData);
-                        $mediaUrls[] = $file['url'];
-                    } else {
-                        // File chưa được upload, cần upload trước
-                        if (isset($file['tmp_name']) && file_exists($file['tmp_name'])) {
+                try {
+                    foreach ($mediaFiles as $file) {
+                        if (isset($file['url']) && !empty($file['url'])) {
+                            $mediaData = [
+                                'message_id' => $messageId,
+                                'url' => $file['url'],
+                                'public_id' => $file['public_id'] ?? null,
+                                'type' => $file['type'],
+                                'metadata' => json_encode([
+                                    'file_name' => $file['name'] ?? null,
+                                    'file_size' => $file['size'] ?? null,
+                                    'width' => null,
+                                    'height' => null,
+                                    'format' => null,
+                                ]),
+                                'created_at' => date('Y-m-d H:i:s'),
+                            ];
+                            $this->messageMediaModel->create($mediaData);
+                        } elseif (isset($file['tmp_name']) && file_exists($file['tmp_name'])) {
                             $uploadResult = null;
-                            
+
                             if (strpos($file['type'], 'audio/') === 0) {
-                                // Use special method for audio files
                                 $uploadResult = $this->messengerCloudinaryService->uploadAudioFile($file, 'messenger');
                             } else {
-                                // Use base64 method for images and videos
                                 $fileContent = file_get_contents($file['tmp_name']);
                                 $base64Data = base64_encode($fileContent);
-                                
-                                // Determine resource type based on file type
-                                $resourceType = 'image';
-                                if (strpos($file['type'], 'video/') === 0) {
-                                    $resourceType = 'video';
-                                }
-                                
+                                $resourceType = strpos($file['type'], 'video/') === 0 ? 'video' : 'image';
                                 $uploadResult = $this->messengerCloudinaryService->uploadBase64Image($base64Data, 'messenger', $resourceType);
                             }
-                            
+
                             if ($uploadResult['success']) {
                                 $mediaData = [
                                     'message_id' => $messageId,
@@ -426,91 +485,90 @@ class MessageController extends BaseController
                                         'width' => $uploadResult['width'] ?? null,
                                         'height' => $uploadResult['height'] ?? null,
                                         'format' => $uploadResult['format'] ?? null,
-                                        'duration' => $uploadResult['duration'] ?? null
+                                        'duration' => $uploadResult['duration'] ?? null,
                                     ]),
-                                    'created_at' => date('Y-m-d H:i:s')
+                                    'created_at' => date('Y-m-d H:i:s'),
                                 ];
                                 $this->messageMediaModel->create($mediaData);
-                                $mediaUrls[] = $uploadResult['url'];
                             }
                         }
                     }
+                } catch (\Throwable $mediaError) {
+                    error_log('[MessageController] sendMessage media: ' . $mediaError->getMessage());
                 }
             }
 
-            // Cập nhật thời gian cuối của conversation
-            $this->conversationModel->updateLastUpdated($conversationId);
+            try {
+                $this->conversationModel->updateLastUpdated($conversationId);
+            } catch (\Throwable $e) {
+                error_log('[MessageController] updateLastUpdated: ' . $e->getMessage());
+            }
 
-            // Lấy thông tin tin nhắn đầy đủ để gửi qua WebSocket
-            $fullMessage = $this->messageModel->getById($messageId);
-            
-            // Gửi thông báo realtime
-            $this->webSocketService->broadcastMessage([
-                'type' => 'new_message',
-                'conversation_id' => $conversationId,
-                'message' => $fullMessage
-            ]);
+            $fullMessage = null;
+            try {
+                $fullMessage = $this->messageModel->getById($messageId);
+            } catch (\Throwable $e) {
+                error_log('[MessageController] getById after send: ' . $e->getMessage());
+            }
 
-            // In-app + FCM cho shipper khi khách gửi tin (label shipper:{id}:order:{id})
-            if ($this->container && $fullMessage) {
+            if ($fullMessage) {
                 try {
-                    $cid = (int) $conversationId;
-                    $conv = $this->conversationModel->getByConversationId($cid);
-                    if ($conv && !empty($conv['label']) && isset($conv['customer_id'])) {
-                        $label = (string) $conv['label'];
-                        $customerId = (int) $conv['customer_id'];
-                        $senderId = (int) ($fullMessage['sender_id'] ?? 0);
-                        if ($customerId > 0 && $senderId === $customerId && preg_match('/^shipper:(\d+):order:(\d+)$/', $label, $m)) {
-                            $shipperUserId = (int) $m[1];
-                            $orderNumericId = (int) $m[2];
-                            $pdo = $this->container->database()->getConnection();
-                            $notificationService = new NotificationService($pdo);
-                            $preview = trim((string) ($fullMessage['content'] ?? ''));
-                            if ($preview === '' || preg_match('/^\[(Image|Ảnh|Video)\]$/iu', $preview)) {
-                                $mediaList = $fullMessage['media'] ?? [];
-                                $preview = !empty($mediaList) ? '[Ảnh]' : 'Tin nhắn mới';
-                            }
-                            $fn = trim((string) ($fullMessage['first_name'] ?? ''));
-                            $ln = trim((string) ($fullMessage['last_name'] ?? ''));
-                            $who = trim($fn . ' ' . $ln) ?: 'Khách hàng';
-                            $snippet = function_exists('mb_substr')
-                                ? mb_substr($preview, 0, 120)
-                                : substr($preview, 0, 120);
-                            $notificationService->sendPushNotification(
-                                $shipperUserId,
-                                'Tin nhắn mới',
-                                $who . ': ' . $snippet,
-                                [
-                                    'type' => 'new_chat_message',
-                                    'conversation_id' => $cid,
-                                    'customer_user_id' => $customerId,
-                                    'order_id' => $orderNumericId,
-                                    'customer_name' => $who,
-                                ],
-                                'new_chat_message'
-                            );
-                        }
-                    }
+                    $this->webSocketService->broadcastMessage([
+                        'type' => 'new_message',
+                        'conversation_id' => $conversationId,
+                        'message' => $fullMessage,
+                    ]);
                 } catch (\Throwable $e) {
-                    error_log('[MessageController] Shipper chat notification: ' . $e->getMessage());
+                    error_log('[MessageController] broadcastMessage: ' . $e->getMessage());
                 }
+
+                $this->notifyShipperOfCustomerChatMessage((int) $conversationId, $fullMessage);
             }
 
-            http_response_code(200);
-            echo json_encode([
+            $this->emitJson([
                 'success' => true,
                 'message' => 'Message sent successfully',
                 'status_code' => 200,
-                'data' => $fullMessage
-            ]);
+                'data' => $fullMessage ?? [
+                    'message_id' => (int) $messageId,
+                    'conversation_id' => (int) $conversationId,
+                    'sender_id' => (int) $user['user_id'],
+                    'content' => $content,
+                    'sent_at' => date('Y-m-d H:i:s'),
+                    'is_read' => 0,
+                    'media' => [],
+                    'is_link' => $isLink,
+                ],
+            ], 200);
 
-        } catch (\Exception $e) {
-            http_response_code(500);
-            echo json_encode([
+        } catch (\Throwable $e) {
+            error_log('[MessageController] sendMessage: ' . $e->getMessage());
+
+            if ($messageId) {
+                $fullMessage = null;
+                try {
+                    $fullMessage = $this->messageModel->getById($messageId);
+                } catch (\Throwable $ignored) {
+                }
+
+                $this->emitJson([
+                    'success' => true,
+                    'message' => 'Message sent successfully',
+                    'status_code' => 200,
+                    'data' => $fullMessage ?? [
+                        'message_id' => (int) $messageId,
+                        'conversation_id' => (int) ($conversationId ?? 0),
+                        'content' => $content,
+                    ],
+                ], 200);
+                return;
+            }
+
+            $this->emitJson([
                 'success' => false,
                 'message' => 'Error: ' . $e->getMessage(),
-                'status_code' => 500
-            ]);
+                'status_code' => 500,
+            ], 500);
         }
     }
 
