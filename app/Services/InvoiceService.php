@@ -20,7 +20,7 @@ class InvoiceService
         $options->set('isHtml5ParserEnabled', true);
         $options->set('isPhpEnabled', true);
         $options->set('isRemoteEnabled', true);
-        $options->set('defaultFont', 'Arial');
+        $options->set('defaultFont', 'DejaVu Sans');
         
         $this->dompdf->setOptions($options);
     }
@@ -62,7 +62,7 @@ class InvoiceService
             <title>Hóa đơn #' . $order['invoice_number'] . '</title>
             <style>
                 body {
-                    font-family: Arial, sans-serif;
+                    font-family: 'DejaVu Sans', sans-serif;
                     font-size: 12px;
                     line-height: 1.4;
                     color: #333;
