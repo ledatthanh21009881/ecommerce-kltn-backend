@@ -741,13 +741,12 @@ class AuthController extends Controller
     }
 
     /**
-     * Forgot Password - Generate new password and send via email
+     * Forgot Password - Send OTP code via email (customer + admin)
      */
     public function forgotPassword(Request $req, Response $res)
     {
         $data = $req->json();
         
-        // Validate input
         $validator = Validator::make($data, [
             'email' => 'required|email'
         ]);
@@ -759,7 +758,6 @@ class AuthController extends Controller
         try {
             $wantsAdminFlow = !empty($data['for_admin']);
 
-            // Find user by email
             $user = $this->userModel->findByEmail($data['email']);
             
             if (!$user) {
@@ -771,7 +769,6 @@ class AuthController extends Controller
                 ], 404);
             }
             
-            // Get account info
             $account = $this->accountModel->find($user['account_id']);
             
             if (!$account) {
@@ -792,95 +789,87 @@ class AuthController extends Controller
                 ], 404);
             }
             
-            // Generate reset token
-            $resetToken = bin2hex(random_bytes(32));
+            $otpCode = $this->generateOTP();
+            $expiresAt = date('Y-m-d H:i:s', strtotime('+10 minutes'));
             
-            // Save reset token to database
             $pdo = $this->container->database()->getConnection();
-            $stmt = $pdo->prepare("UPDATE accounts SET password_reset_token = ?, reset_token_expires_at = DATE_ADD(NOW(), INTERVAL 1 HOUR) WHERE account_id = ?");
-            $stmt->execute([$resetToken, $account['account_id']]);
+            $stmt = $pdo->prepare("UPDATE accounts SET password_reset_token = ?, reset_token_expires_at = ? WHERE account_id = ?");
+            $stmt->execute([$otpCode, $expiresAt, $account['account_id']]);
             
-            // Create reset link (admin flow uses /admin-reset-password, storefront uses /reset-password)
-            $frontendBaseUrl = rtrim($_ENV['PAYOS_BASE_URL'] ?? 'http://localhost:3000', '/');
-            $isAdmin = $this->isAdminAccountForReset($user, $account);
-            $resetPath = ($wantsAdminFlow && $isAdmin) ? '/admin-reset-password' : '/reset-password';
-            $resetLink = $frontendBaseUrl . $resetPath . '?' . http_build_query([
-                'token' => trim($resetToken),
-            ]);
-            
-            // Send email with reset link
             $emailService = new \App\Support\EmailService();
-            $emailSent = $emailService->sendPasswordResetLinkEmail($data['email'], $user['account_name'] ?? $account['account_name'], $resetLink);
+            $emailSent = $emailService->sendOTPEmail($data['email'], $user['account_name'] ?? $account['account_name'], $otpCode);
             
             if ($emailSent) {
                 return $res->json(ResponseHelper::success([
-                    'message' => 'Password reset link has been sent to your email.',
-                ], 'If the email exists, a password reset link has been sent.'));
+                    'message' => 'OTP code has been sent to your email.',
+                ], 'OTP code has been sent to your email.'));
             } else {
-                // If email fails, still return success for security
-                return $res->json(ResponseHelper::success(null, 'If the email exists, a password reset link has been sent.'));
+                return $res->json(ResponseHelper::serverError('Failed to send OTP email. Please try again.'));
             }
             
         } catch (Exception $e) {
             return $res->json(ResponseHelper::serverError('Failed to process forgot password request: ' . $e->getMessage()));
         }
     }
-    
-    /**
-     * Generate random password
-     */
-    private function generateRandomPassword(int $length = 10): string
-    {
-        $characters = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*';
-        $password = '';
-        $maxIndex = strlen($characters) - 1;
-        
-        for ($i = 0; $i < $length; $i++) {
-            $password .= $characters[random_int(0, $maxIndex)];
-        }
-        
-        return $password;
-    }
 
     /**
-     * Validate reset password token.
+     * Customer Verify OTP - Verify OTP code for password reset
      */
-    public function validateResetToken(Request $req, Response $res)
+    public function customerVerifyOTP(Request $req, Response $res)
     {
         $data = $req->json();
-
+        
         $validator = Validator::make($data, [
-            'token' => 'required',
+            'email' => 'required|email',
+            'otp' => 'required|string|size:6'
         ]);
-
+        
         if (!$validator->validate()) {
             return $res->json(ResponseHelper::validationError($validator->getErrors()));
         }
-
+        
         try {
-            $token = (string)$data['token'];
-
-            $account = $this->accountModel->findByResetToken($token);
-            if (!$account) {
-                return $res->json(ResponseHelper::error('Invalid or expired reset token'));
+            $user = $this->userModel->findByEmail($data['email']);
+            
+            if (!$user) {
+                return $res->json(ResponseHelper::error('Invalid email or OTP code'));
             }
-
-            return $res->json(ResponseHelper::success(null, 'Reset token is valid'));
+            
+            $account = $this->accountModel->find($user['account_id']);
+            
+            if (!$account) {
+                return $res->json(ResponseHelper::error('Invalid email or OTP code'));
+            }
+            
+            if ($account['password_reset_token'] !== $data['otp']) {
+                return $res->json(ResponseHelper::error('Invalid OTP code'));
+            }
+            
+            if (strtotime($account['reset_token_expires_at']) < time()) {
+                return $res->json(ResponseHelper::error('OTP code has expired. Please request a new one.'));
+            }
+            
+            return $res->json(ResponseHelper::success([
+                'verified' => true,
+                'message' => 'OTP verified successfully. You can now reset your password.'
+            ], 'OTP verified successfully'));
+            
         } catch (Exception $e) {
-            return $res->json(ResponseHelper::serverError('Token validation failed: ' . $e->getMessage()));
+            error_log('[Customer Verify OTP] Error: ' . $e->getMessage());
+            return $res->json(ResponseHelper::serverError('Failed to verify OTP: ' . $e->getMessage()));
         }
     }
     
     /**
-     * Reset Password - Reset password using token
+     * Reset Password - Reset password using OTP
      */
     public function resetPassword(Request $req, Response $res)
     {
         $data = $req->json();
         
-        // Validate input
         $validator = Validator::make($data, [
-            'token' => 'required',
+            'email' => 'required|email',
+            'otp' => 'required|string|size:6',
             'new_password' => 'required',
             'confirm_password' => 'required'
         ]);
@@ -894,20 +883,28 @@ class AuthController extends Controller
         }
         
         try {
-            // Find account by reset token
-            $account = $this->accountModel->findByResetToken($data['token']);
+            $user = $this->userModel->findByEmail($data['email']);
             
-            if (!$account) {
-                return $res->json(ResponseHelper::error('Invalid or expired reset token'));
+            if (!$user) {
+                return $res->json(ResponseHelper::error('Invalid email or OTP code'));
             }
             
-            // Update password
+            $account = $this->accountModel->find($user['account_id']);
+            
+            if (!$account) {
+                return $res->json(ResponseHelper::error('Invalid email or OTP code'));
+            }
+            
+            if ($account['password_reset_token'] !== $data['otp']) {
+                return $res->json(ResponseHelper::error('Invalid OTP code'));
+            }
+            
+            if (strtotime($account['reset_token_expires_at']) < time()) {
+                return $res->json(ResponseHelper::error('OTP code has expired. Please request a new one.'));
+            }
+            
             $this->accountModel->updatePassword($account['account_id'], $data['new_password']);
-            
-            // Clear reset token
             $this->accountModel->clearPasswordResetToken($account['account_id']);
-            
-            // Reset failed attempts
             $this->accountModel->resetFailedAttempts($account['account_id']);
             
             return $res->json(ResponseHelper::success(null, 'Password has been reset successfully. You can now login with your new password.'));

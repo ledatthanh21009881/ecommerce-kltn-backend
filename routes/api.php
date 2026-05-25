@@ -29,7 +29,7 @@ $router->post('/api/v1/auth/refresh', [AuthController::class, 'refresh']);
 $router->post('/api/v1/auth/refresh-advanced', [AuthController::class, 'refreshTokenAdvanced']);
 $router->post('/api/v1/auth/logout-advanced', [AuthController::class, 'logoutAdvanced'], [new AuthMiddleware($container)]);
 $router->post('/api/v1/auth/forgot-password', [AuthController::class, 'forgotPassword']);
-$router->post('/api/v1/auth/validate-reset-token', [AuthController::class, 'validateResetToken']);
+$router->post('/api/v1/auth/verify-otp', [AuthController::class, 'customerVerifyOTP']);
 $router->post('/api/v1/auth/reset-password', [AuthController::class, 'resetPassword']);
 $router->get('/api/v1/auth/me', [AuthController::class, 'profile'], [new AuthMiddleware($container)]);
 $router->get('/api/v1/auth/check-admin', [AuthController::class, 'checkAdminRole'], [new AuthMiddleware($container)]);
