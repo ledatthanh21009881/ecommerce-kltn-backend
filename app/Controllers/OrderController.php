@@ -1271,9 +1271,9 @@ class OrderController extends Controller
                     'Email' => $order['email'],
                     'Phone' => $order['phone'],
                     'Status' => $order['status'],
-                    'Total Amount' => number_format($order['total_amount'], 0, ',', '.') . ' VND',
-                    'Shipping Fee' => number_format($order['shipping_fee'], 0, ',', '.') . ' VND',
-                    'Discount' => number_format($order['discount_amount_applied'], 0, ',', '.') . ' VND',
+                    'Total Amount' => number_format((float)($order['total_amount'] ?? 0), 0, ',', '.') . ' VND',
+                    'Shipping Fee' => number_format((float)($order['shipping_fee'] ?? 0), 0, ',', '.') . ' VND',
+                    'Discount' => number_format((float)($order['discount_amount_applied'] ?? 0), 0, ',', '.') . ' VND',
                     'Created Date' => $order['created_at'],
                     'Estimated Delivery' => $order['estimated_delivery_at']
                 ];

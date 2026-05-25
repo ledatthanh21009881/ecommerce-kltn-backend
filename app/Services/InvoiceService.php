@@ -221,7 +221,7 @@ class InvoiceService
         
         $total = 0;
         foreach ($orderItems as $index => $item) {
-            $itemTotal = $item['quantity'] * $item['unit_price'];
+            $itemTotal = (float)$item['quantity'] * (float)$item['unit_price'];
             $total += $itemTotal;
             
             $html .= '
@@ -229,8 +229,8 @@ class InvoiceService
                         <td>' . ($index + 1) . '</td>
                         <td>' . ($item['product_name_snapshot'] ?? 'N/A') . '</td>
                         <td class="text-center">' . $item['quantity'] . '</td>
-                        <td class="text-right">' . number_format($item['unit_price'], 0, ',', '.') . ' ₫</td>
-                        <td class="text-right">' . number_format($itemTotal, 0, ',', '.') . ' ₫</td>
+                        <td class="text-right">' . number_format((float)$item['unit_price'], 0, ',', '.') . ' ₫</td>
+                        <td class="text-right">' . number_format((float)$itemTotal, 0, ',', '.') . ' ₫</td>
                     </tr>';
         }
         
@@ -242,18 +242,18 @@ class InvoiceService
                 <table>
                     <tr>
                         <td>Tạm tính:</td>
-                        <td class="text-right">' . number_format($total, 0, ',', '.') . ' ₫</td>
+                        <td class="text-right">' . number_format((float)$total, 0, ',', '.') . ' ₫</td>
                     </tr>
                     <tr>
                         <td>Phí vận chuyển:</td>
-                        <td class="text-right">' . number_format($order['shipping_fee'] ?? 0, 0, ',', '.') . ' ₫</td>
+                        <td class="text-right">' . number_format((float)($order['shipping_fee'] ?? 0), 0, ',', '.') . ' ₫</td>
                     </tr>';
         
-        if (($order['discount_amount_applied'] ?? 0) > 0) {
+        if ((float)($order['discount_amount_applied'] ?? 0) > 0) {
             $html .= '
                     <tr>
                         <td>Giảm giá:</td>
-                        <td class="text-right">-' . number_format($order['discount_amount_applied'], 0, ',', '.') . ' ₫</td>
+                        <td class="text-right">-' . number_format((float)$order['discount_amount_applied'], 0, ',', '.') . ' ₫</td>
                     </tr>';
         }
         

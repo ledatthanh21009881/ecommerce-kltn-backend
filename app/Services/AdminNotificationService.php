@@ -109,7 +109,7 @@ final class AdminNotificationService
         $this->create(
             self::TYPE_NEW_ORDER,
             'Đơn hàng mới',
-            'Có đơn mới #' . $orderId . ' — tổng ' . number_format($totalAmount, 0, ',', '.') . ' đ.',
+            'Có đơn mới #' . $orderId . ' — tổng ' . number_format((float)$totalAmount, 0, ',', '.') . ' đ.',
             $orderId,
             null
         );
