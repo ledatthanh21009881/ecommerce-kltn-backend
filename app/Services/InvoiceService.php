@@ -62,7 +62,7 @@ class InvoiceService
             <title>Hóa đơn #' . $order['invoice_number'] . '</title>
             <style>
                 body {
-                    font-family: 'DejaVu Sans', sans-serif;
+                    font-family: "DejaVu Sans", sans-serif;
                     font-size: 12px;
                     line-height: 1.4;
                     color: #333;

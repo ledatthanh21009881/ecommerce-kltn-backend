@@ -33,46 +33,55 @@ class InvoiceController extends Controller
     }
 
     /**
-     * GET /api/invoice/generate - Tạo hóa đơn PDF
+     * GET /api/invoice/generate - Tạo hóa đơn PDF (Dompdf, hỗ trợ tiếng Việt)
      */
     public function generate(Request $req, Response $res)
     {
         try {
             $orderId = (int) $req->query('order_id');
-            $format = $req->query('format', 'pdf'); // pdf hoặc email
+            $format = $req->query('format', 'pdf');
             
             if (!$orderId) {
                 return $res->json(ResponseHelper::badRequest('Order ID is required'));
             }
 
-            // Kiểm tra đơn hàng tồn tại
             $order = $this->orderModel->getByIdWithDetails($orderId);
             if (!$order) {
                 return $res->json(ResponseHelper::notFound('Order not found'));
             }
 
-            // Kiểm tra trạng thái đơn hàng
             if (!in_array($order['status'], ['completed', 'confirmed'])) {
                 return $res->json(ResponseHelper::forbidden('Invoice can only be generated for completed or confirmed orders'));
             }
 
-            // Kiểm tra thanh toán
             $payment = $this->paymentModel->getByOrderId($orderId);
             if (!$payment || $payment['status'] !== 'confirmed') {
                 return $res->json(ResponseHelper::forbidden('Payment must be confirmed before generating invoice'));
             }
 
-            // Tạo hóa đơn PDF
-            $pdfPath = $this->createInvoicePDF($order);
-            
+            $invoiceService = new \App\Services\InvoiceService();
+
             if ($format === 'email') {
-                // Gửi email
-                $this->sendInvoiceEmail($order, $pdfPath);
-                return $res->json(ResponseHelper::success(null, 'Invoice sent to customer email'));
-            } else {
-                // Trả về file PDF
-                $this->returnPDF($res, $pdfPath, $order['invoice_number']);
+                $emailService = new EmailService();
+                $emailSent = $emailService->sendInvoiceEmail($order['email'], $order);
+                if ($emailSent) {
+                    return $res->json(ResponseHelper::success(null, 'Invoice sent to customer email'));
+                }
+                return $res->json(ResponseHelper::serverError('Failed to send invoice email'));
             }
+
+            $pdfContent = $invoiceService->generateInvoicePDF($order);
+
+            while (ob_get_level()) {
+                ob_end_clean();
+            }
+
+            header('Content-Type: application/pdf');
+            header('Content-Disposition: attachment; filename="invoice_' . $order['invoice_number'] . '.pdf"');
+            header('Content-Length: ' . strlen($pdfContent));
+            header('Cache-Control: no-cache, must-revalidate');
+            echo $pdfContent;
+            exit;
 
         } catch (Exception $e) {
             error_log("Invoice generation error: " . $e->getMessage());
