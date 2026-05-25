@@ -597,13 +597,23 @@ class Order extends Model
                 SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed_orders,
                 SUM(CASE WHEN status = 'cancelled' THEN 1 ELSE 0 END) as cancelled_orders,
                 SUM(CASE WHEN status = 'returned' THEN 1 ELSE 0 END) as returned_orders,
-                SUM(total_amount) as total_revenue
+                COALESCE(SUM(CASE WHEN status = 'completed' THEN total_amount ELSE 0 END), 0) as total_revenue
             FROM {$this->table}
-            WHERE created_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)
         ";
         
         $stmt = $this->getConnection()->query($sql);
-        return $stmt->fetch(PDO::FETCH_ASSOC);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        return [
+            'total_orders' => (int) ($row['total_orders'] ?? 0),
+            'pending_orders' => (int) ($row['pending_orders'] ?? 0),
+            'processing_orders' => (int) ($row['processing_orders'] ?? 0),
+            'shipping_orders' => (int) ($row['shipping_orders'] ?? 0),
+            'completed_orders' => (int) ($row['completed_orders'] ?? 0),
+            'cancelled_orders' => (int) ($row['cancelled_orders'] ?? 0),
+            'returned_orders' => (int) ($row['returned_orders'] ?? 0),
+            'total_revenue' => (float) ($row['total_revenue'] ?? 0),
+        ];
     }
 
     public function getAvailableShippers(): array

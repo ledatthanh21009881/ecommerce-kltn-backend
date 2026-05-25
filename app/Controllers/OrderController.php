@@ -1187,7 +1187,8 @@ class OrderController extends Controller
             
             $user = $req->getAttribute('user');
             $changedBy = $user['user_id'] ?? 1; // Default to admin user
-            $reason = $req->body('reason') ?? 'Order cancelled by admin';
+            $body = $req->getBody();
+            $reason = !empty($body['reason']) && is_string($body['reason']) ? $body['reason'] : 'Admin hủy đơn hàng';
             
             $result = $this->orderModel->updateStatus($id, 'cancelled', $changedBy, $reason);
             if (!$result) {
